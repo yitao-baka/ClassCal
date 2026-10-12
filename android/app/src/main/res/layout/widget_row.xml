@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  列表里的一行。由 `WidgetRenderer` 用 `RemoteViews.addView` 逐个塞进
+  `widget_list.xml` 的 `@id/rows` 里。
+
+  单独一个文件而不是在代码里拼：RemoteViews 的子视图**只能**来自布局资源，
+  没有「用代码建一个 LinearLayout」这条路。
+
+  课程色那条小竖线用 `LinearLayout` 而不是 `<View>` —— `RemoteViews` 的
+  inflate 过滤器只放行 `@RemoteView` 标注类，`android.view.View` 不在其中。
+  详见 `widget_next.xml` 里那段注释。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingTop="3dp"
+    android:paddingBottom="3dp">
+
+    <LinearLayout
+        android:id="@+id/row_bar"
+        android:layout_width="3dp"
+        android:layout_height="26dp"
+        android:background="#3F51B5" />
+
+    <TextView
+        android:id="@+id/row_time"
+        android:layout_width="42dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginLeft="8dp"
+        android:maxLines="1"
+        android:textColor="#666666"
+        android:textSize="11sp" />
+
+    <TextView
+        android:id="@+id/row_title"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#000000"
+        android:textSize="13sp" />
+
+    <TextView
+        android:id="@+id/row_location"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:layout_marginLeft="6dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:maxWidth="88dp"
+        android:textColor="#666666"
+        android:textSize="10sp" />
+</LinearLayout>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  列表里的分组标题（「今天 · 周三」/「明天 · 周四」）。
+
+  单独一个布局是为了能塞进同一个 `@id/rows` 容器：`RemoteViews` 的子视图只能
+  来自布局资源，没有「用代码建一个 TextView」这条路。内容为「今天 + 明天」时，
+  容器的实际内容就是 `分组标题 / 行 / 行 / 分组标题 / 行 …`。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/group_title"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="5dp"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:textColor="#666666"
+    android:textSize="11sp" />

@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小尺寸：下一节课（或者正在上的那一节）。
+
+  最左那条竖线是课程色，用 `setBackgroundColor` 上色 —— 一个像素都不走 Binder。
+  其余文字全部由 Dart 预格式化好（`08:00`、`第一二节`），这一侧不做格式化。
+
+  那条竖线是 `LinearLayout` 而不是 `<View>`：`RemoteViews` 在 inflate 前会装一个
+  只放行 `@RemoteView` 标注类的过滤器，而 `android.view.View` **没有**这个标注 ——
+  用 `<View>` 会 `InflateException: Class not allowed to be inflated`。
+  这个过滤器在启动器那一侧同样生效，所以它不只是预览的问题。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="horizontal"
+    android:background="#FFFFFF">
+
+    <LinearLayout
+        android:id="@+id/next_bar"
+        android:layout_width="4dp"
+        android:layout_height="match_parent"
+        android:background="#3F51B5" />
+
+    <LinearLayout
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:layout_gravity="center_vertical"
+        android:orientation="vertical"
+        android:paddingLeft="10dp"
+        android:paddingRight="10dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp">
+
+        <TextView
+            android:id="@+id/next_eyebrow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#666666"
+            android:textSize="11sp" />
+
+        <TextView
+            android:id="@+id/next_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textColor="#000000"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/next_location"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#666666"
+            android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小组件的根/兜底布局。
+
+  这里出现的颜色全部是**占位**：真正的颜色由 Dart 算好、Kotlin 用
+  `setInt(id, "setBackgroundColor", …)` / `setTextColor` 覆盖。之所以还要在
+  XML 里写一遍，是因为 `android:initialLayout` 会在快照还没到位时先显示一帧
+  （系统加小组件那一刻），那时如果前景色是默认的黑色而背景是透明的，
+  在某些启动器上会是一块看不清的脏东西。
+
+  也没有任何圆角/背景 drawable：Android 12 起启动器本来就会给小组件套自己的
+  圆角遮罩（`system_app_widget_background_radius`），自己再画一层会和它打架。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#FFFFFF">
+
+    <TextView
+        android:id="@+id/initial_message"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:padding="12dp"
+        android:textColor="#666666"
+        android:textSize="12sp"
+        android:text="打开 ClassCal 更新" />
+</LinearLayout>

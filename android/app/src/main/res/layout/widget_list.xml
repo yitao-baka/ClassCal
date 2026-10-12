@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  中/大尺寸：今天（或今天 + 明天）的课。
+
+  `@id/rows` 是唯一的动态容器，由 `RemoteViews.addView` 逐行填充；
+  末行那句「还有 N 节」是 `@id/footer`，放不下时才可见。
+
+  `@id/gear` 是标题栏右侧那个齿轮：点它打开 App 并直接落到这个实例的配置页。
+  小尺寸不画它（3dp 的竖条旁边放不下一个按钮），配置从设置页进。
+
+  `@id/set_label` 是日程名那条信息条，在标题栏**上面**，默认 `gone`。
+  做成独立一条而不是拼进 `@id/list_header`：那个标题是 `maxLines="1"`，右边还
+  紧挨着 26dp 的齿轮，在 380dp 的中号卡片上可用宽度只剩 150dp 左右 ——
+  把日程名拼进去会把「第 5 周 · 10/5–10/11」挤成省略号，
+  也就是标签吃掉自己标注的那个信息。
+
+  它占的高度记在 `WidgetRenderer.LABEL_DP` 里，会从行数预算里扣掉。
+  **改这个文件的上下边距或字号要同步改那个常量**，否则开着这条时
+  最后一行会被顶出卡片露出半个。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:paddingLeft="12dp"
+    android:paddingRight="12dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:id="@+id/set_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="3dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#666666"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/list_header"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#666666"
+            android:textSize="12sp" />
+
+        <ImageView
+            android:id="@+id/gear"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:padding="5dp"
+            android:src="@drawable/ic_widget_gear"
+            android:contentDescription="设置" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/rows"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical" />
+
+    <TextView
+        android:id="@+id/footer"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#666666"
+        android:textSize="11sp"
+        android:visibility="gone" />
+</LinearLayout>

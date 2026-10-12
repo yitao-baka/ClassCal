@@ -1,0 +1,65 @@
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# Widget Preview related
+.widget_preview/
+
+# ---------------------------------------------------------------------------
+# 本机的东西，不进仓库
+# ---------------------------------------------------------------------------
+
+# 调试期的中间产物：截图、logcat、从设备拉下来的 sqlite 和提醒表快照。
+# 里面是**真实课表和真实位置**，而且只是排查过程留下的东西。
+.scratch/
+.shots/
+.tmp/
+
+# 从教务系统导出的真实课表：真教室、真老师姓名。
+# `test/ics_export_test.dart` 里「拿真实课表验一遍」那一组用它 —— 本地有这个
+# 文件就跑，没有就整组跳过。想要那组测试就自己导一份放回这个路径，
+# 见 `test/fixtures/README.md`。
+test/fixtures/timetable_2026-2027-1.ics
+

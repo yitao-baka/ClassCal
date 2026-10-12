@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  小组件的元数据。
+
+  尺寸用**旧公式**（`70 * 格数 - 30`）写的：2 格宽 = 110dp、1 格高 = 40dp。
+  `targetCellWidth/Height` 是 API 31 才有的，写在旧版本上会被忽略 —— 它只是
+  让新启动器「默认占几格」有个更准的依据，值要和 minWidth/minHeight 对上，
+  两个数不一致时启动器会按它自己那套算，看起来像是「最小尺寸没生效」。
+
+  `updatePeriodMillis` 是**安全网**，不是主力：它最短只能 30 分钟、而且不精确。
+  主力是 `WidgetAlarms` 那条精确闹钟链（每次重画之后排下一个边界）。链子万一
+  被 ROM 掐断，这一条兜住 —— 代价是每天最多多 48 次唤醒，对一个天天看的桌面
+  组件来说值得。
+
+  `resizeMode` 两个方向都给：用户要的是「可调尺寸」。
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="110dp"
+    android:minHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="40dp"
+    android:targetCellWidth="2"
+    android:targetCellHeight="1"
+    android:maxResizeWidth="280dp"
+    android:maxResizeHeight="460dp"
+    android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen"
+    android:initialLayout="@layout/widget_initial"
+    android:previewImage="@mipmap/ic_launcher"
+    android:description="@string/widget_description" />

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  列表里的一句提示行（目前只有「没有课」）。
+
+  「今天 + 明天」那一档里，明天没课时原先**什么都不画** —— 只有一个孤零零的
+  「明天 · 周四」标题，看起来和「渲染坏了」一模一样。改成标题下面补一句灰字。
+
+  单独一个布局文件而不是复用 `widget_group.xml`：`RemoteViews` 的子视图只能
+  来自布局资源，同一个布局资源可以 addView 多次，但 `@id` 会重复，而
+  `setTextViewText(R.id.group_title, …)` 在多个同名 id 上会一起改。
+  所以「一处要写标题、一处要写内容」就必须是两个文件。
+
+  裸 `TextView` 作根，和 `widget_group.xml` 一个写法。
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/note_text"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="3dp"
+    android:maxLines="1"
+    android:ellipsize="end"
+    android:textColor="#666666"
+    android:textSize="11sp" />

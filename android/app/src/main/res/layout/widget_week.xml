@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  大尺寸：本周缩略网格。
+
+  **整个小组件只有这一张位图**，而且它不带字 —— 只画彩色圆角块。
+  理由是 Binder：`RemoteViews` 的位图要走那条 1 MB 的共享事务缓冲区，
+  4×4 的小组件在 3x 屏上按 ARGB_8888 算就是 4.5 MB，直接 `TransactionTooLarge`。
+  大色块放大两倍看不出问题，文字放大两倍就糊了，所以不画字正好两头都对。
+
+  `scaleType="fitXY"` + `layout_weight` 让它铺满剩余空间 —— 用权重而不是在代码里
+  设像素高宽，是因为 `setViewLayoutWidth/Height` 要 API 31，而这里 minSdk 24。
+
+  `@id/set_label` 是日程名那条信息条，见 `widget_list.xml` 里那段说明。
+  这里它**不影响任何预算**：网格是 `layout_weight="1"`，上面多一行它就自己
+  短一截，画出来的位图会被 `fitXY` 拉满。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/widget_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#FFFFFF"
+    android:paddingLeft="12dp"
+    android:paddingRight="12dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="8dp">
+
+    <TextView
+        android:id="@+id/set_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="3dp"
+        android:maxLines="1"
+        android:ellipsize="end"
+        android:textColor="#666666"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
+
+        <TextView
+            android:id="@+id/week_header"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:maxLines="1"
+            android:ellipsize="end"
+            android:textColor="#666666"
+            android:textSize="12sp" />
+
+        <ImageView
+            android:id="@+id/gear"
+            android:layout_width="26dp"
+            android:layout_height="26dp"
+            android:padding="5dp"
+            android:src="@drawable/ic_widget_gear"
+            android:contentDescription="设置" />
+    </LinearLayout>
+
+    <ImageView
+        android:id="@+id/grid"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="6dp"
+        android:scaleType="fitXY"
+        android:contentDescription="本周课表" />
+</LinearLayout>

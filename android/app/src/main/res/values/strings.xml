@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 小组件选择器里那行小字。刻意不写「下节课 / 今日课程」——
+         这个实例到底画什么由用户在 App 里选，选择器里说死哪一种反而是误导。 -->
+    <string name="widget_description">桌面课表</string>
+</resources>
