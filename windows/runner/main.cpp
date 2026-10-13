@@ -27,7 +27,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"classcal", origin, size)) {
+  // 窗口标题。和 Android 那边的 `app_name` 是同一个显示名 ——
+  // 那个是给人看的名字，和 exe 文件名（`BINARY_NAME=classcal`）不是一回事。
+  if (!window.Create(L"ClassCal", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

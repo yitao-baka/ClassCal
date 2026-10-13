@@ -11,10 +11,10 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // **冷启动时先记下「这次启动是为了配置哪个实例」**，再挂通道。
-        // Dart 那边首帧就会 `consumeLaunch()`，所以 id 必须在引擎可用**之前**
-        // 就落到盘里 —— 放在 `onCreate` 里也行，但放这里离用它的地方更近，
-        // 也顺带覆盖了「引擎重建」这条路径。
+        // **冷启动时先记下「这次是为什么启动的」**，再挂通道。
+        // Dart 那边首帧就会 `consumeLaunch()` / `consumeOpen()`，所以 id 必须在
+        // 引擎可用**之前**就落到盘里 —— 放在 `onCreate` 里也行，但放这里离用它的
+        // 地方更近，也顺带覆盖了「引擎重建」这条路径。
         rememberLaunchTarget(intent)
 
         // 传 applicationContext 而不是 this(Activity)：取色只读资源，
@@ -43,26 +43,41 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
-     * App 已经在跑的时候，小组件上的齿轮被点了一下。
+     * App 已经在跑的时候，小组件上的某一块被点了一下。
      *
      * `MainActivity` 是 `launchMode="singleTop"`，所以这种时候走的是
-     * `onNewIntent` 而不是重新 `onCreate` —— 不在这里接住，用户点齿轮会只是
-     * 「切回 App 刚才那页」，什么都不发生。
+     * `onNewIntent` 而不是重新 `onCreate` —— 不在这里接住，用户点齿轮（或者
+     * 卡片主体）会只是「切回 App 刚才那页」，什么都不发生。
      *
      * **只存不推**：把它记进 `WidgetStore`，Dart 那边在启动首帧和每次回到前台时
-     * 主动 `consumeLaunch()`。反过来在这里往通道里推，会在 Dart 还没挂上监听时
-     * 把这次调用丢掉 —— 而表现是「点了齿轮，App 开了，但没落到配置页」。
+     * 主动 `consumeLaunch()` / `consumeOpen()`。反过来在这里往通道里推，会在 Dart
+     * 还没挂上监听时把这次调用丢掉 —— 而表现是「点了一下，App 开了，但没落到
+     * 该去的地方」。
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         rememberLaunchTarget(intent)
     }
 
+    /**
+     * 把这次 `Intent` 的来意分别记下 —— 齿轮走 `pending_launch`，卡片主体走
+     * `pending_open`。
+     *
+     * **按 action 分派，不是「只认齿轮就返回」**（改之前就是后一种写法）。
+     * 两条路各存各的键，不能合成一个槽位：用户完全可能先点齿轮改配置、退出来
+     * 又点卡片主体，混用一个键就会把后一次点击变成「打开配置页」。
+     *
+     * 认不出来的 action 直接忽略 —— 系统也会用别的 action 拉起这个 Activity
+     * （启动器图标、`MAIN`/`LAUNCHER`），那些都是「正常启动」，不该落进任何一条。
+     */
     private fun rememberLaunchTarget(intent: Intent?) {
         if (intent == null) return
-        if (intent.action != WidgetRenderer.ACTION_CONFIGURE) return
         val id = intent.getIntExtra(WidgetRenderer.EXTRA_WIDGET_ID, 0)
-        if (id != 0) WidgetStore.savePendingLaunch(applicationContext, id)
+        if (id == 0) return
+        when (intent.action) {
+            WidgetRenderer.ACTION_CONFIGURE -> WidgetStore.savePendingLaunch(applicationContext, id)
+            WidgetRenderer.ACTION_OPEN -> WidgetStore.savePendingOpen(applicationContext, id)
+        }
     }
 
     /** 权限对话框的异步结果转交给桥。 */

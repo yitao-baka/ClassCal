@@ -87,13 +87,20 @@ object WidgetPainter {
      * [widthPx] / [heightPx] 是 `ImageView` 实际要占的像素；这里只在超过
      * [MAX_BITMAP_BYTES] 时等比缩小，剩下的交给 `fitXY` 拉伸。
      *
-     * **收一个块而不是整份快照**：网格的周次、行数、「这是哪一列」全在块上。
+     * **收一个块而不是整份快照**：网格的行数和「这条事属不属于这一块」全在块上。
      * 总览块和某个日程块的差别只体现在 `accepts` 和列号算出来的结果里，
      * 画法一模一样 —— 所以这里不该有「是不是总览」这种分支。
+     *
+     * [grid] 是**这一次要画的那一周**，由 `WidgetSnapshot.gridFor` 切出来。为什么
+     * 不在这里自己从块上取七个零点：那个字段（`fallbackWeekMs`）现在只是
+     * 「今天不在学期里时的兜底」，学期中直接用它画出来的是**别的一周** ——
+     * 而那种错只在开学前才看得见。
      */
     fun weekGrid(
         snapshot: WidgetSnapshot,
         block: WidgetSetBlock,
+        grid: GridWeek,
+        nowMs: Long,
         widthPx: Int,
         heightPx: Int,
     ): Bitmap {
@@ -119,17 +126,17 @@ object WidgetPainter {
 
         // 今天那一列的淡底。放在课块之前画，否则它会盖在课块上把颜色冲淡。
         //
-        // **先问一句今天在不在这一格网格里。** `gridWeek` 可能是「今天不在学期内」
-        // 时的兜底周次（`WidgetSetBlock.currentWeek = 0` 那一支），那时候按
-        // `todayWeekday` 直接涂一列，就会在一块**不是本周**的网格上标出一个
-        // 「今天」—— 用户看到的是「我的课表把周三当今天了」，而它其实只是
-        // 放假期间翻到了第 1 周。判据是两个整数的区间比较，不是日期运算。
-        val todayStart = snapshot.dayStartsMs.firstOrNull()
-        val weekRange = block.weekRange()
-        val todayInGrid = todayStart != null && weekRange != null &&
-            todayStart >= weekRange.first && todayStart < weekRange.second
-        val todayCol = snapshot.todayWeekday - 1
-        if (todayInGrid && todayCol in 0..6) {
+        // **今天落在这一周的哪一列，一次区间比较就问出来了**。今天不在这一周里
+        // 时（`columnOf` 判的是包含，两头都管）返回 -1，那一列就不涂 —— 而那正是
+        // 「今天不在学期里，画的是兜底周」的情形：在一块不是本周的网格上标出一个
+        // 「今天」，用户看到的是「我的课表把周三当今天了」。
+        //
+        // 改之前这里是 `dayStartsMs.first()`（当时那个字段的意思是「今天的零点」）
+        // 加 `todayWeekday - 1`，还要配一道 `todayInGrid` 守卫。那两个字段现在都
+        // 不在了：`dayStartsMs[0]` 是**窗口的周一**，留着它就是「字段没改名、
+        // 含义变了、谁也没发现」—— 表现是淡底只在窗口的第一周出现。
+        val todayCol = grid.columnOf(nowMs)
+        if (todayCol in 0..6) {
             paint.color = withAlpha(theme.accent, TODAY_TINT_ALPHA)
             canvas.drawRect(
                 todayCol * cellW, 0f, (todayCol + 1) * cellW, bh.toFloat(), paint,
@@ -140,10 +147,10 @@ object WidgetPainter {
         // 但分成两趟之后「后面的块盖住前面的字」这种可能彻底不存在 ——
         // 表现是某一格的字缺一半，看起来像渲染坏了。
         val blocks = mutableListOf<Pair<WidgetSession, RectF>>()
-        for (s in snapshot.sessionsInWeek(block)) {
-            // 列号由**块的七个零点**算出来，不用 `s.weekday`：总览那一块里混着
+        for (s in snapshot.sessionsBetween(block, grid.fromMs, grid.endMs)) {
+            // 列号由**这一周的七个零点**算出来，不用 `s.weekday`：总览那一块里混着
             // 几个日程的事件，而它们的周号各不相同 —— 只有绝对日期是共有的。
-            val col = block.dayIndexOf(s.startAtMs)
+            val col = grid.columnOf(s.startAtMs)
             if (col !in 0..6) continue
             val row = s.gridRow
             // 行号 -1 = 作息时间之外的单次事件，网格里没有它的位置。

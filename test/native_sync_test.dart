@@ -75,6 +75,9 @@ class _FakeHomeWidget implements HomeWidgetBridge {
 
   @override
   Future<int?> consumeLaunch() async => null;
+
+  @override
+  Future<int?> consumeOpen() async => null;
 }
 
 /// 记下每一次推送。判「有没有同步」靠它就是够了 —— 同步的**结果**对不对
@@ -349,8 +352,10 @@ void main() {
       expect(h.homeWidget.pushes, isNotEmpty, reason: '快照压根没推过 —— 桌面上永远是空的');
       final snap = h.homeWidget.last;
       expect(snap['version'], isNotNull);
-      expect(snap['today'], isNotNull);
-      // 造的那套课表 7 个星期各一条，窗口 9 天里一定有课。
+      // 「今天」不再是一个日期对象，而是一条逐日时间轴（35 天 + 一格排他上界）。
+      expect((snap['dayStartsMs']! as List), hasLength(kWidgetHorizonDays + 1));
+      expect((snap['dayLabels']! as List), hasLength(kWidgetHorizonDays));
+      // 造的那套课表 7 个星期各一条，窗口 5 整周里一定有课。
       expect(sessionsOf(snap), isNotEmpty);
       expect(sessionsOf(snap).first.keys, contains('startAtMs'));
     });
@@ -394,10 +399,12 @@ void main() {
           containsAll([idA, kOverviewBlockId]),
           reason: '每个日程一块，末尾永远跟一个总览块');
 
-      // `_seedSet` 把 week1Monday 放在两周前，所以现在是第 3 周。
+      // `_seedSet` 把 week1Monday 放在两周前，所以现在是第 3 周 ——
+      // 窗口的第 **0** 格就是今天所在的那一周（窗口从本周一起算）。
       final mine = blocks.firstWhere((b) => b['id'] == idA);
-      expect(mine['currentWeek'], 3);
-      expect(mine['weekTitle'], startsWith('第 3 周 · '));
+      final titles = (mine['weekTitles']! as List).cast<String>();
+      expect(titles, hasLength(kWidgetHorizonDays ~/ 7));
+      expect(titles.first, startsWith('第 3 周 · '));
 
       // 这一句钉的是**接线**，不是算得对不对：小组件上「跟随当前」那个 scope
       // 是照顶层这个 `activeSetId` 去挑块的，它要是没跟着 `effectiveSetIdProvider`

@@ -48,11 +48,15 @@ String _dartClassBody(String name) {
   return src.substring(start, end);
 }
 
+/// `class` 也在边界里，不只是 `data class` —— 文件里有一个普通的
+/// `class GridWeek`，而它的七个零点**不是** JSON 键。漏掉这一条的话，
+/// `WidgetSetBlock` 那段会一路吞到下一个 `data class`，把 GridWeek 圈进去 ——
+/// 表现是「扫出来的键集合里多了几个」，指向完全错误的方向。
 String _kotlinClassBody(String name) {
   final src = _read(_kotlinSnapshot);
   final start = src.indexOf('data class $name(');
   expect(start, isNonNegative, reason: 'Kotlin 侧没找到 data class $name');
-  final next = RegExp(r'\n(data class |object |enum )')
+  final next = RegExp(r'\n(data class |class |object |enum )')
       .firstMatch(src.substring(start + 1));
   return src.substring(start, next == null ? src.length : start + 1 + next.start);
 }
@@ -193,12 +197,16 @@ void main() {
     });
 
     test('一块日程', () {
-      // 周次 / 标题 / 网格坐标从顶层搬到了这里。少一个键的表现是轻的
-      // （Kotlin 用默认值兜），但 `gridDayStartsMs` 兜不住：它是那一块的
-      // 全部坐标，缺了它整张网格会画成一堆叠在周一那一列的方块。
+      // v3 换掉了这一块的三个键：`currentWeek` / `gridWeek` 删了（周号在原生侧
+      // 一个读者都没有），`weekTitle` 变成 `weekTitles`（5 周各一条），
+      // `gridDayStartsMs` 收窄成 `fallbackWeekMs`（今天不在学期里时才画的那一周）。
+      //
+      // 少一个键的表现是轻的（Kotlin 那里是空表，退回兜底），但
+      // `fallbackWeekMs` 兜不住的是**语义**：它从「画的那一周」变成了
+      // 「没有别的可画时才画的那一周」。留着旧名字就会有人拿它当默认的网格周 ——
+      // 而学期中那样画出来的是别的一周，只在开学前才看得出来。
       expectSameKeys('WidgetSetBlock', {
-        'id', 'name', 'currentWeek', 'weekTitle', 'gridWeek', 'gridRows',
-        'gridDayStartsMs',
+        'id', 'name', 'weekTitles', 'gridRows', 'fallbackWeekMs',
       });
     });
 
@@ -236,14 +244,19 @@ void main() {
     });
 
     test('快照顶层', () {
-      // `y` / `m` / `d` 是 `today` 那个嵌套对象里的三个键。
-      // `currentWeek` / `weekTitle` / `gridWeek` / `gridRows` **不在这一层了** ——
+      // `currentWeek` / `weekTitle` / `gridWeek` / `gridRows` **不在这一层** ——
       // 它们搬进了 `blocks`。留在顶层就等于留一个「这是哪一套的周次」说不清的
       // 全局值，而它必然对其中一个日程是错的。
+      //
+      // v3 又删掉了五个键：`today`（嵌套的 `y`/`m`/`d`）和 `todayTitle` /
+      // `tomorrowTitle` / `todayWeekday`。它们五个合起来表达的是**生成那一刻的
+      // 今天**，而本轮要拆的正是这个结论 —— 只要「今天」还是一个钉死的日期，
+      // 过了零点那份快照就只能是错的。取而代之的是 `dayStartsMs`（36 格逐日表）
+      // 和 `dayLabels`（35 个绝对星期），于是「今天」变成一个**算出来的下标**。
       expectSameKeys('WidgetSnapshot', {
-        'version', 'generatedAtMs', 'today', 'todayTitle', 'tomorrowTitle',
-        'dayStartsMs', 'todayWeekday', 'theme', 'layout', 'sessions',
-        'boundariesMs', 'activeSetId', 'blocks', 'y', 'm', 'd',
+        'version', 'generatedAtMs', 'dayStartsMs', 'dayLabels',
+        'tzOffsetMinutes', 'theme', 'layout', 'sessions', 'boundariesMs',
+        'activeSetId', 'blocks',
       });
     });
 
@@ -256,10 +269,11 @@ void main() {
           ?.group(1);
       expect(dart, isNotNull, reason: 'Dart 侧没找到 kWidgetSnapshotVersion');
       expect(dart, kotlin);
-      // 本轮从 1 提到 2。两个都停在 1 的话，这条测试照旧是绿的，
-      // 而桌面上会拿新版 Dart 写出的快照去喂一个不认识 `blocks` 的旧 Kotlin。
+      // v2 从 1 提到 2（块），v3 从 2 提到 3（逐日时间轴）。两个数字停在上一版
+      // 的话，这条测试照旧是绿的，而桌面上会拿新 Dart 写出的快照去喂一个不认识
+      // 新结构的旧 Kotlin —— 读出来的是「今天是 0 年 0 月 0 日」那种东西。
       expect(dart, kWidgetSnapshotVersion.toString());
-      expect(dart, '2');
+      expect(dart, '3');
     });
 
     test('总览块的哨兵 id 两边一致', () {
@@ -313,30 +327,42 @@ void main() {
         activeSetId: 1,
       );
       final json = snap.toJson();
-      // 扫出来的键集合里含着 `today` 那个嵌套对象里的 `y`/`m`/`d`，
-      // 所以顶层要减掉它们 —— 减掉之后两边必须**一模一样**，多一个少一个都算。
-      expect(json.keys.toSet(),
-          _dartKeys(_dartClassBody('WidgetSnapshot')).difference({'y', 'm', 'd'}));
-      expect((json['today']! as Map).keys.toSet(), {'y', 'm', 'd'});
-      // 三个零点必须是**整数毫秒**：Kotlin 用 `getLong` 读，写成字符串或者
-      // 精度不够的浮点会让那边拿到 0，然后「今天」永远是错的。
+      // 顶层不再有嵌套的日期对象（v2 的 `today: {y,m,d}`），所以两边必须
+      // **一模一样**，多一个少一个都算。
+      expect(json.keys.toSet(), _dartKeys(_dartClassBody('WidgetSnapshot')));
+      // 36 个零点必须是**整数毫秒**：Kotlin 用 `getLong` 读，写成字符串或者
+      // 精度不够的浮点会让那边拿到 0 —— 于是整条时间轴报废，卡片永远停在
+      // 「打开 ClassCal 更新」。
       expect(json['dayStartsMs'], everyElement(isA<int>()));
+      expect((json['dayStartsMs']! as List<int>).length, kWidgetHorizonDays + 1);
       expect((json['dayStartsMs']! as List<int>).first,
-          DateTime(2026, 10, 10).millisecondsSinceEpoch);
+          DateTime(2026, 10, 5).millisecondsSinceEpoch,
+          reason: '窗口锚在**本周一**，不是今天');
+      expect((json['dayStartsMs']! as List<int>).last,
+          DateTime(2026, 11, 9).millisecondsSinceEpoch,
+          reason: '最后一格是第 35 天的排他上界');
+      // 星期标签和零点表**等长减一**：多一个少一个都会让「今天 · 周三」错位一格，
+      // 而错位之后每一天都还长得正常。
+      expect((json['dayLabels']! as List).length, kWidgetHorizonDays);
+      expect((json['dayLabels']! as List).first, '周一');
+      // 时区偏移是 `getOffset(now)/60000` 比的那个数（Kotlin 用 `optInt` 读）。
+      expect(json['tzOffsetMinutes'], isA<int>());
 
-      // 块那一份也要真的写出来：`gridDayStartsMs` 同样是 `getLong` 读的
-      // **整数毫秒的七个值**，而它是那一块的全部坐标 —— 少一个、
-      // 或者写成浮点，桌面上整张网格会叠在周一那一列。
+      // 块那一份也要真的写出来：`fallbackWeekMs` 同样是 `getLong` 读的
+      // **整数毫秒的七个值** —— 少一个、或者写成浮点，开学前那张网格会叠在
+      // 周一那一列。
       final blocks = json['blocks']! as List;
       expect(blocks, hasLength(2), reason: '一个日程 + 一块总览');
       final block = blocks.first as Map<String, Object?>;
       expect(block['name'], '2026-2027-1');
-      expect(block['gridDayStartsMs'], everyElement(isA<int>()));
-      expect(block['gridDayStartsMs'], hasLength(7));
-      expect((block['gridDayStartsMs']! as List<int>).first,
-          DateTime(2026, 10, 5).millisecondsSinceEpoch,
-          reason: '第 5 周的周一');
+      expect((block['weekTitles']! as List).length, kWidgetHorizonDays ~/ 7);
+      expect((block['weekTitles']! as List).first, startsWith('第 5 周 · '));
+      expect(block['fallbackWeekMs'], everyElement(isA<int>()));
+      expect(block['fallbackWeekMs'], hasLength(7));
       expect((blocks.last as Map)['id'], kOverviewBlockId);
+      expect((blocks.last as Map)['weekTitles'],
+          everyElement(isA<String>()),
+          reason: '总览块的标题只有日期区间，照样是五个字符串');
     });
   });
 
@@ -375,9 +401,13 @@ void main() {
     // 这三条各自对应一种**看起来完全正常但是错的**失败。全部发生在 Kotlin 里，
     // Dart 测不到，所以只能扫源码。
 
-    test('快照过期时不许照画', () {
-      // 用户一周没开 App，快照会照样说「今天是周三」，然后自信地画出**上周三**
-      // 的课。这是整个小组件唯一一种会安静地错的失败形态。
+    test('快照盖不住 now 时不许照画 —— 但判据是**窗口**，不是「今天是几号」', () {
+      // 这一条以前断言的是「`isStale` 必须和本机的年月日比」。**方向翻过来了**，
+      // 因为它比的那个东西正是 bug 本身：拿「今天是几号」当判据，等于宣布
+      // 「这份快照只在生成的那一天有效」，于是过了零点的每一次重画都被拦下来画
+      // 一句「打开 ClassCal 更新」—— 闹钟一直有响，是这道闸门把卡片判死的。
+      //
+      // 现在判的是「now 在不在窗口里」，所以这里钉的是那两次区间比较。
       final renderer = _read(_kotlinRenderer);
       expect(
         RegExp(r'if \(snapshot == null \|\| snapshot\.isStale\(nowMs\)\)')
@@ -387,9 +417,28 @@ void main() {
       );
       final snapshot = _read(_kotlinSnapshot);
       for (final field in ['Calendar.YEAR', 'Calendar.MONTH', 'Calendar.DAY_OF_MONTH']) {
-        expect(snapshot, contains(field),
-            reason: 'isStale 没有真的和本机的年月日比 —— 少了 $field');
+        expect(snapshot, isNot(contains(field)),
+            reason: 'isStale 又回去比本机的年月日了 —— 那会把跨天判成「过期」，'
+                '桌面上那张卡片就又要靠每天打开一次 App 才活');
       }
+      expect(RegExp(r'val first = dayStartsMs\.firstOrNull\(\) \?: return true')
+              .hasMatch(snapshot),
+          isTrue,
+          reason: '窗口的左端没有比较 —— 快照太旧时会被当成还能用');
+      expect(RegExp(r'val last = dayStartsMs\.lastOrNull\(\) \?: return true')
+              .hasMatch(snapshot),
+          isTrue,
+          reason: '**空表要当过期。** 用 `first()` / `last()` 的话，键缺失时它会抛，'
+              '而渲染路径上的 catch 会把异常吞掉 —— 表现是卡片静默冻在上一帧，'
+              '比画一句提示更难查');
+      expect(RegExp(r'nowMs < first \|\| nowMs >= last').hasMatch(snapshot), isTrue,
+          reason: '窗口边界不是这个比法。`>= last` 而不是 `> last`：最后一格是'
+              '**排他上界**，写成 `> last` 会多算一天，而那天是真上课的日子');
+      // 换了时区也要判过期：窗口里的零点是在旧时区算出来的，不纠正的话
+      // 往后「哪节课算今天」会偏几个小时 —— 而那看起来完全正常。
+      expect(RegExp(r'TimeZone\.getDefault\(\)\.getOffset\(nowMs\)').hasMatch(snapshot),
+          isTrue,
+          reason: 'isStale 没有比时区偏移 —— 跨时区之后要等 35 天窗口用尽才会纠正');
     });
 
     test('位图只有周网格一张，尺寸按字节封顶', () {
@@ -446,17 +495,31 @@ void main() {
       );
     });
 
-    test('「下一节课」问的是那节课在哪一天，不是「今天是不是第 0 天」', () {
-      // `dayIndexOf(nowMs)` 恒等于 0（now 一定落在今天那个区间里），所以
-      // 拿它当条件的那一支永远命中，带星期的那一支成了死代码。表现是周六
-      // 的卡片上写着「第一二节 · 08:00–09:40」指着一节周一的课 ——
-      // 读起来就是「我今天一二节有课」，而且没有任何东西看起来不对。
+    test('「下一节课」问的是那节课在哪一天，**两边都问同一个下标**', () {
+      // 这条断言的方向也翻过来了。
+      //
+      // 它以前禁止渲染器里出现 `dayIndexOf(nowMs)`，理由是「那个答案永远是 0，
+      // 所以拿它当条件的那一支恒真、带星期的那一支是死代码」。那在当时是对的：
+      // 「今天是第 0 天」在旧结构里是定义出来的，不是算出来的。
+      //
+      // 现在窗口锚在周一起，「今天是第几格」是**真的算出来的**（今天可能是 0..34
+      // 里任何一格），所以它恰恰是这一支该用的那个数。所以现在钉的是两句话：
+      // 两边的下标都得问出来，而且**是同一个来源**。
       final renderer = _read(_kotlinRenderer);
+      expect(RegExp(r'dayIndexOf\(nowMs\)').hasMatch(renderer), isTrue,
+          reason: '没有算「今天是窗口里的第几格」—— 那「这节是不是今天的」就无从判起');
       expect(RegExp(r'dayIndexOf\(session\.startAtMs\)').hasMatch(renderer),
           isTrue,
           reason: '这一支问的不是「这节课在哪一天」');
-      expect(RegExp(r'dayIndexOf\(nowMs\)').hasMatch(renderer), isFalse,
-          reason: '还在拿 now 去查它在哪一天 —— 那个答案永远是 0');
+      expect(RegExp(r'dayIndex == t').hasMatch(renderer), isTrue,
+          reason: '比的两个下标不是同一个来源（该是 `t` 和这条自己的 dayIndex）');
+      // 更远的那一支必须带上日期：窗口有 5 周，光写「周三」无从判断是哪个周三。
+      expect(renderer, contains('session.dateLabel'),
+          reason: '比明天更远的课没有带上日期 —— 一个无从定位的「周三」比不写更坏');
+      // 搜索范围要夹在一周之内，否则 2×1 那张卡片会在放假时报一节三周后的课。
+      expect(RegExp(r'currentOrNext\(block, nowMs, untilMs = weekEnd\)').hasMatch(renderer),
+          isTrue,
+          reason: '「下一节课」的搜索范围没有上界 —— 35 天窗口里会报出很远的课');
     });
 
     test('「小」这一档按高度判，不按宽度', () {
@@ -542,9 +605,16 @@ void main() {
       // 表现是「被钉在辅修上的实例，标题写着主修的『第 5 周』」——
       // 日期和课对不上，但看起来完全正常。
       final renderer = _stripComments(_read(_kotlinRenderer));
-      expect(RegExp(r'snapshot\.weekTitle').hasMatch(renderer), isFalse,
+      // `(?!Of)`：要禁的是**顶层那个字段**，而 `snapshot.weekTitleOf(block, …)`
+      // 恰恰是从块上取的那一个（它名字里带着 `weekTitle`，所以不加这一条会误报）。
+      expect(RegExp(r'snapshot\.weekTitle(?!Of)').hasMatch(renderer), isFalse,
           reason: '还在从快照顶层读周次标题 —— 那是「当前日程」的，不是这个实例的');
-      expect(renderer, contains('block.weekTitle'));
+      // v3 起标题是**五条**，按今天在窗口里的第几周去取 —— 取哪一条也得先算下标，
+      // 所以这里同时钉住「从块上取」和「用算出来的下标取」。
+      expect(RegExp(r'weekTitleOf\(block, weekIdx\)').hasMatch(renderer), isTrue,
+          reason: '周次标题不是从块上、按算出来的周下标取的');
+      expect(RegExp(r'weekIndexOf\(nowMs\)').hasMatch(renderer), isTrue,
+          reason: '没有算今天在窗口里属于第几周');
 
       final painter = _stripComments(_read(_kotlinPainter));
       expect(RegExp(r'snapshot\.gridRows|snapshot\.gridWeek').hasMatch(painter),
@@ -552,11 +622,20 @@ void main() {
           reason: '还在从快照顶层读网格坐标');
       expect(painter, contains('block.gridRows'),
           reason: '网格的行数不是从块上取的');
-      // 列号必须按块的七天零点算，不能退回 `s.weekday` ——
+      // 列号必须按**这一周那七个零点**算，不能退回 `s.weekday` ——
       // 总览那一块里混着几个日程的事件，它们的周号各不相同，
       // 只有绝对日期是共有的。
-      expect(painter, contains('block.dayIndexOf('),
-          reason: '列号不是按块的零点算的');
+      //
+      // v3 改的是「那七个零点从哪来」：以前挂在块上（`block.dayIndexOf`），
+      // 现在由 `gridFor` 从窗口里切出来（`grid.columnOf`）。**判据本身一个字
+      // 没变**，变的是它的来源 —— 而 `columnOf` 比 `dayIndexOf` 多一条上界，
+      // 因为兜底周整周都在今天之前时，「往前找最近的一天」会把周日当成今天。
+      expect(painter, contains('grid.columnOf('),
+          reason: '列号不是按这一周的零点算的');
+      expect(RegExp(r'\.sessionsInWeek\(').hasMatch(painter), isFalse,
+          reason: '还在用「块上那一周」取事件 —— 学期中那是别的一周');
+      expect(painter, contains('block, grid.fromMs, grid.endMs'),
+          reason: '画的不是「这一块在这一周里」的事件');
     });
 
     test('三种布局都收到同一块，没有一处自己去找日程', () {

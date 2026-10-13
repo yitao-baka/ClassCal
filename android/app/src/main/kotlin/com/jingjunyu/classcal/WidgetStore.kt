@@ -21,6 +21,7 @@ object WidgetStore {
     private const val PREFS = "classcal_widget"
     private const val KEY_SNAPSHOT = "snapshot"
     private const val KEY_PENDING_LAUNCH = "pending_launch"
+    private const val KEY_PENDING_OPEN = "pending_open"
     private const val PREFIX_CONFIG = "config_"
     private const val PREFIX_OPTIONS = "options_"
     private const val PREFIX_SCOPE = "scope_"
@@ -64,11 +65,19 @@ object WidgetStore {
      * 形态是「看起来完全正常但是错的」。反过来，**比它旧的照读** —— 老版本
      * 写下的快照缺少的字段都能用默认值兜住，那没必要让用户的桌面空一张。
      *
-     * v2（本轮）改了 `blocks` / `activeSetId`，而 v1 的快照里**根本没有 `blocks`**
-     * —— 那不是「缺个字段用默认值兜」，是整张卡片没有坐标系可用。所以升级之后
-     * 桌面上会短暂显示「打开 ClassCal 更新」，直到 App 跑一次推上新快照。
+     * v2 改了 `blocks` / `activeSetId`，而 v1 的快照里**根本没有 `blocks`**
+     * —— 那不是「缺个字段用默认值兜」，是整张卡片没有坐标系可用。
+     *
+     * v3（本轮）把「今天」从一个**日期**（`todayYear/Month/Day` + 三格零点）换成
+     * 了一条**35 天的逐日时间轴**，删掉了 `todayTitle` / `tomorrowTitle` /
+     * `todayWeekday`，块上还换掉了三个字段。同样兜不住：v2 的快照里那几个键
+     * 一个都没有，硬读出来的会是「今天是 0 年 0 月 0 日」。
+     *
+     * 两次的代价都一样：升级后、App 跑一次之前，桌面上会短暂显示
+     * 「打开 ClassCal 更新」。**不写迁移**——旧结构里根本没有「窗口」这个维度，
+     * 迁移代码是一辈子只跑一次、却要永远维护的东西。这比那两句话贵。
      */
-    private const val SUPPORTED_VERSION = 2
+    private const val SUPPORTED_VERSION = 3
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -173,6 +182,7 @@ object WidgetStore {
             .remove(PREFIX_SCOPE + id)
             .remove(PREFIX_SETNAME + id)
             .remove(KEY_PENDING_LAUNCH)
+            .remove(KEY_PENDING_OPEN)
             .apply()
     }
 
@@ -228,6 +238,30 @@ object WidgetStore {
     fun takePendingLaunch(context: Context): Int {
         val id = prefs(context).getInt(KEY_PENDING_LAUNCH, 0)
         if (id != 0) prefs(context).edit().remove(KEY_PENDING_LAUNCH).apply()
+        return id
+    }
+
+    // -------------------------------------------------------------------------
+    // 「点了卡片（不是齿轮）打开了 App」
+    // -------------------------------------------------------------------------
+
+    /**
+     * 待处理的 appWidgetId：用户点了卡片的**非齿轮区域**，App 起来之后要落到
+     * 那个实例配的日程 + 今天那一周。
+     *
+     * 和 [savePendingLaunch] 是**两条独立的路，各存各的键**。合成一个槽位是错的：
+     * 用户完全可能先点齿轮改配置、退出来又点卡片主体，混用一个键就会把后一次
+     * 点击变成「打开配置页」—— 而两次点击写在同一个键上，后写的那次覆盖前面，
+     * 没有东西会报错。拉而不是推的理由同 [savePendingLaunch]。
+     */
+    fun savePendingOpen(context: Context, id: Int) {
+        prefs(context).edit().putInt(KEY_PENDING_OPEN, id).apply()
+    }
+
+    /** 取一次就清掉，免得每次冷启动都跳到课表。返回 0 表示没有。 */
+    fun takePendingOpen(context: Context): Int {
+        val id = prefs(context).getInt(KEY_PENDING_OPEN, 0)
+        if (id != 0) prefs(context).edit().remove(KEY_PENDING_OPEN).apply()
         return id
     }
 }

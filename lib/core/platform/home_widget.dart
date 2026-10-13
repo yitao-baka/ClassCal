@@ -203,6 +203,16 @@ abstract class HomeWidgetBridge {
   ///
   /// 取一次就清掉，避免每次冷启动都弹配置页。返回 null 表示这次是正常启动。
   Future<int?> consumeLaunch();
+
+  /// 取出「打开 App 是为了看某个实例显示的那个日程」的那一次点击。
+  ///
+  /// 和 [consumeLaunch] 是**两条独立的路**，各自记各自的待处理 id：点卡片主体
+  /// 是「打开 App 看课表」，点齿轮是「打开 App 改这张卡片的配置」，用户可能
+  /// 连着点两下不同位置，混成一个槽位就会丢掉其中一次。
+  ///
+  /// 同样是**拉而不是推**，同样取一次就清。返回 null 表示这一次不是从卡片
+  /// 进来的。
+  Future<int?> consumeOpen();
 }
 
 /// 按平台挑实现。
@@ -304,6 +314,12 @@ class MethodChannelHomeWidgetBridge implements HomeWidgetBridge {
     return (id == null || id == 0) ? null : id;
   }
 
+  @override
+  Future<int?> consumeOpen() async {
+    final id = await _invoke<int>('consumeOpen');
+    return (id == null || id == 0) ? null : id;
+  }
+
   /// 通道调用统一走这里，把两类「没接上」都收敛成 null。
   ///
   /// `MissingPluginException` 在真机上意味着原生侧忘了注册通道，但在
@@ -358,4 +374,7 @@ class UnsupportedHomeWidgetBridge implements HomeWidgetBridge {
 
   @override
   Future<int?> consumeLaunch() async => null;
+
+  @override
+  Future<int?> consumeOpen() async => null;
 }

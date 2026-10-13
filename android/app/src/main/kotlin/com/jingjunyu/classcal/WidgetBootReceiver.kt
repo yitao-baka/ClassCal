@@ -21,10 +21,18 @@ import android.content.Intent
  * - `MY_PACKAGE_REPLACED`：升级会清掉闹钟，也会让落盘的快照变成上一个版本
  *   写的。后者由 `WidgetStore.SUPPORTED_VERSION` 兜着（读不懂就画「打开
  *   ClassCal 更新」），但至少要把卡片刷新一遍，别让它停在旧内容上。
- * - `TIME_SET` / `TIMEZONE_CHANGED`：`RTC_WAKEUP` 存的是 UTC 毫秒数，而快照
- *   里的「今天」是**本地**日期。改了时间或飞了时区之后，两边就对不上了 ——
- *   重画一次会走到 `isStale` 那条判断，于是卡片诚实地显示「课表已过期」，
- *   而不是继续拿昨天的数据装作今天。
+ * - `TIME_SET` / `TIMEZONE_CHANGED`：`RTC_WAKEUP` 存的是 UTC 毫秒数，而快照里
+ *   的逐日零点是在**当时那个时区**算出来的。改了时间、或者飞了时区之后，两边
+ *   就对不上了，重画一次才是对的。
+ *
+ *   这一条**以前是靠 `isStale` 兜的**：那时候快照只表示它生成的那一天，所以
+ *   跨时区之后重画会画出「课表已过期」。现在不是了 —— 快照是一条 35 天的窗口，
+ *   重画的结果是照着新时区重新取下标，**卡片自己翻到正确的那一天**。跨时区
+ *   （而不只是跨天）这件事由 `isStale` 里那条时区偏移比较兜着：偏移没变就
+ *   什么都不用做，变了才判过期。
+ *
+ *   顺带，这一条也是**真机上验证「第二天自动翻页」的抓手**：`ACTION_TIME_CHANGED`
+ *   在设置里把日期往后调一天就会立刻触发，不用等到零点。
  */
 class WidgetBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

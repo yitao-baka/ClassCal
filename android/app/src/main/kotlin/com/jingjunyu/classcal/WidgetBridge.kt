@@ -105,6 +105,8 @@ class WidgetBridge(
 
             "consumeLaunch" -> result.success(WidgetStore.takePendingLaunch(context))
 
+            "consumeOpen" -> result.success(WidgetStore.takePendingOpen(context))
+
             else -> result.notImplemented()
         }
     }

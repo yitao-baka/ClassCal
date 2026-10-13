@@ -15,15 +15,27 @@
 /// 已经有一份了（[courseColor] / `weekOf`），在 Kotlin 里再写一份，两份就会
 /// 慢慢走偏，而走偏的表现是「同一门课在 App 里是蓝的、在桌面上是绿的」。
 ///
+/// ## 一条摊平的逐日时间轴
+///
+/// 整份快照围着[一条从本周一起、连续 35 天的逐日表][WidgetSnapshot.dayStartsMs]
+/// 转。原生侧要回答「今天是第几天」只需一次区间比较得到下标，于是**过零点之后
+/// 它自己就会翻页**，不需要用户打开 App。
+///
+/// 在这之前不是这样：那一版把「今天」钉成三个整数（年月日），过了零点原生侧
+/// 一比就判定快照过期，只能画一句「打开 ClassCal 更新」—— 桌面上那张卡片
+/// **每天都要靠打开一次 App 才能活**。根因不是漏做，是那份快照在结构上就只能
+/// 表示它被生成的那一天。
+///
 /// ## 每个日程一块（[WidgetSetBlock]）
 ///
-/// 一个实例可以显示**某一个日程**（而不是把所有日程合起来）。所以周次、标题、
-/// 网格这一组坐标**不能是一个全局值**：两个日程的 `week1Monday` 不同时，
-/// 「第 5 周」落在不同的日期上。
+/// 一个实例可以显示**某一个日程**（而不是把所有日程合起来）。所以周次标题
+/// **不能是一个全局值**：两个日程的 `week1Monday` 不同时，「第 5 周」落在
+/// 不同的日期上，而它们又落在同一个日历周里。
 ///
-/// 于是每块自带[七天的本地零点][WidgetSetBlock.gridDayStartsMs]，原生侧据此
-/// **按日期区间**筛事件、算列号 —— 全是减法，一个字都没有重新做日历运算。
-/// 「按周号筛」在总览那件事上必然错，理由和 App 里总览页那一处逐字相同。
+/// 于是每块自带领先算好的[每周标题][WidgetSetBlock.weekTitles]，以及
+/// **今天不在学期里时**才画的那一周[七天的零点][WidgetSetBlock.fallbackWeekMs]。
+/// 原生侧据此按日期区间筛事件、算列号 —— 全是减法，一个字都没有重新做
+/// 日历运算。「按周号筛」在总览那件事上必然错，理由和 App 里总览页那一处逐字相同。
 library;
 
 import 'package:flutter/material.dart';
@@ -36,10 +48,18 @@ import '../time/periods.dart';
 /// 快照的结构版本。原生侧读不懂的版本要当作「没有快照」，而不是硬解析。
 ///
 /// **2** 把周次 / 标题 / 网格坐标从顶层搬进了 `blocks`（每个日程一块），
-/// 并给每条事件加了 `setId`。老快照（v1）一律当过期，桌面上短暂显示
-/// 「打开 ClassCal 更新」，打开一次 App 就恢复 —— 比写一段迁移诚实：
-/// v1 里根本没有「这条事件属于哪个日程」这个维度，补不出来。
-const int kWidgetSnapshotVersion = 2;
+/// 并给每条事件加了 `setId`。
+///
+/// **3** 换掉了「今天」的表达方式：不再发 `today`（年月日三个整数）和拼好的
+/// `todayTitle` / `tomorrowTitle` / `todayWeekday`，改成发一条**从本周一起、
+/// 连续 35 天的逐日零点表**外加等长的星期标签，`dayStartsMs` 也从 3 格变成
+/// 36 格。理由见文件头：固定在某一天上的快照，过零点就只能画「打开 ClassCal
+/// 更新」，而那让桌面上的卡片每天都要靠打开一次 App 才活。
+///
+/// v2 和 v1 的快照一律当过期，桌面上短暂显示「打开 ClassCal 更新」，
+/// 打开一次 App 就恢复 —— 比写一段迁移诚实：旧结构里根本没有「窗口」这个
+/// 维度，补不出来。
+const int kWidgetSnapshotVersion = 3;
 
 /// 总览块在 [WidgetSnapshot.blocks] 里的 id。
 ///
@@ -48,12 +68,21 @@ const int kWidgetSnapshotVersion = 2;
 /// Kotlin 侧 `WidgetSetBlock.OVERVIEW_ID` 必须和它一致（契约测试钉着）。
 const int kOverviewBlockId = -2;
 
-/// 快照往前铺几天。
+/// 快照往前铺几天。从**本周一**起算，所以它是 7 的倍数 —— 尽头正好是
+/// 一个周日的末尾，周网格不会画到半张。
 ///
-/// **比提醒的 30 天短得多，理由正好相反**：漏掉一条提醒是「没看到」，
-/// 而桌面上一张过期的课表是「看到错的」—— 后者更坏。窗口只要盖住
-/// 「本周 + 明天」就够了，再往后的日子用户本来就要打开 App 才看得见。
-const int kWidgetHorizonDays = 9;
+/// **它的新含义是「一次打开能顶多少天」。** 在此之前「今天」在快照里是钉死的
+/// 三个整数，窗口多长都只对生成那一天有效，所以 9 天只是个「够画本周 + 明天」
+/// 的尺寸。现在原生侧能自己在窗口里定位今天了，窗口多长就直接等于「多久不用
+/// 打开 App」—— 9 天能盖住用户报的「第二天」，但一个长假就把它耗尽了。
+///
+/// 35 天（5 整周）的代价是快照 JSON 从约 15 KB 长到约 60–90 KB：事件是一周
+/// 约 35 条 × 5 周，`boundariesMs` 从约 70 条到约 390 条。两者都不影响唤醒
+/// 次数 —— [WidgetSnapshot.boundariesMs] 的读者每次**只排下一个**边界。
+///
+/// 不更长是因为它同时是「快照能有多旧」：那份数据里最久远的一节课也只在
+/// 35 天内可信，而放假的学期末本来就会打开 App 改东西。
+const int kWidgetHorizonDays = 35;
 
 /// 桌面小组件的一套配色。
 ///
@@ -192,24 +221,33 @@ class WidgetSession {
       };
 }
 
-/// **一个日程一块** —— 这块自己的周次、标题、网格坐标。
+/// **一个日程一块** —— 这块自己的每周标题和兜底周。
 ///
 /// 为什么这一组要按日程各算一份，而不是像从前那样顶层算一份：一个被钉在某个
 /// 日程上的实例，标题该显示**那个日程的**「第 5 周」。而两个日程的 `week1Monday`
 /// 不同时，「第 5 周」落在不同的日期上 —— 一个全局值必然对其中一个日程是错的。
 ///
-/// **总览也是一块**（[id] = [kOverviewBlockId]）。它不是某个日程，所以
-/// [currentWeek] 是 0、[weekTitle] 里也**没有**「第 N 周」，只有日期区间 ——
-/// 它没有自己的周号，硬写一个就是编的。
+/// **总览也是一块**（[id] = [kOverviewBlockId]）。它不是某个日程，所以它的
+/// [weekTitles] 里**没有**「第 N 周」，只有日期区间 —— 它没有自己的周号，
+/// 硬写一个就是编的。
+///
+/// ## 这里没有「现在是第几周」
+///
+/// 曾经有一个 `currentWeek` / `gridWeek` 字段。它们现在没了，因为**原生侧
+/// 不再需要知道周号**：今天落在窗口的第几天是一个下标（`dayIndexOf`），
+/// 那个下标除以 7 就是「窗口里的第几周」，而标题直接从 [weekTitles] 取。
+///
+/// 删掉而不是留着，是因为本项目已经有一条同类的教训：**留着一个没人读的字段，
+/// 迟早会被谁当成依据用起来**（`WidgetSession.week` 就是这么被换掉的）。
+/// 一个「第 5 周」的整数摆在块上，下一次改渲染的人很容易拿它去筛事件，而
+/// 两个日程的周号本来是**不可比**的。
 class WidgetSetBlock {
   const WidgetSetBlock({
     required this.id,
     required this.name,
-    required this.currentWeek,
-    required this.weekTitle,
-    required this.gridWeek,
+    required this.weekTitles,
     required this.gridRows,
-    required this.gridDayStartsMs,
+    required this.fallbackWeekMs,
   });
 
   /// 日程 id；总览块是 [kOverviewBlockId]。
@@ -219,36 +257,41 @@ class WidgetSetBlock {
   /// 空串等于那一栏凭空消失，所以这里不允许为空（测试钉着）。
   final String name;
 
-  /// 这个日程自己的「现在第几周」；算不出来（不在学期内）时为 0。
-  final int currentWeek;
-
-  /// `第 5 周 · 10/5–10/11`；不在学期内时为空串。总览块是 `10/5–10/11`。
-  final String weekTitle;
-
-  /// 周网格画哪一周（**这个日程编号体系里的**第几周）。
-  final int gridWeek;
+  /// 窗口里每一周的标题，**下标 = 今天在窗口里的第几周**（`dayIndexOf(now) ~/ 7`）。
+  ///
+  /// 长度是 `kWidgetHorizonDays ~/ 7`。每一项按**这一块自己的编号体系**算：
+  /// `第 5 周 · 10/5–10/11`。今天不在这个日程的学期里时是**空串** ——
+  /// 那不是「没有标题」，见 [fallbackWeekMs]。
+  ///
+  /// 总览块的每一项只有日期区间（`10/5–10/11`），**永远不会是空串**：
+  /// 它不是某个日程，没有学期可不在。
+  final List<String> weekTitles;
 
   /// 周网格有几行 = 一天有几个大节（`kPeriodRowCount`）。
   /// 和 [WidgetSession.gridRow] 配套，两边共用 `periods.dart` 那一张作息表。
   final int gridRows;
 
-  /// **[gridWeek] 那一周的七个本地零点**（周一 … 周日，正好 7 个）。
+  /// **今天不在这个日程的学期里时才画的那一周**的七个本地零点（周一 … 周日）。
   ///
-  /// 这是「按日期筛而不是按周号筛」成立的关键：原生侧手上就有了绝对时刻，
-  /// 判一条事件在不在这一周、落在哪一列，全是减法 —— **一个字都没有重做
-  /// 日历运算**，「Kotlin 不做日历运算」那条约束仍然成立。
+  /// 判据是 `weekTitles[weekIdx].isEmpty` —— 今天早于第 1 周（放假、或者锚点
+  /// 还没到）时，按窗口算出来的那一周是一张**空格子**，而往前翻到「第一节课
+  /// 所在的那一周」至少画的是真课。这是**保留**旧行为，不是新加的：旧的
+  /// `gridWeek = week > 0 ? week : fallbackWeek` 就是这件事，只是那时候
+  /// 这个字段还是「画的那一周」本身，两种含义挤在一个名字里。
   ///
-  /// 总览块的这七个零点**借用当前日程那一周的日期**（总览必须有个坐标系）。
-  final List<int> gridDayStartsMs;
+  /// 改名是必须的。旧名字（`gridDayStartsMs`）一旦被当成「画的那一周」去读，
+  /// 表现就是**开学前那张网格永远停在第 1 周**，而且只在放假期间看得出来。
+  ///
+  /// 一个日程一节课都没有时退到它自己的第 1 周；总览退到**全部日程里最早的
+  /// 那一节课**所在的一周（没有课、也没有日程时退到本周）。
+  final List<int> fallbackWeekMs;
 
   Map<String, Object?> toJson() => {
         'id': id,
         'name': name,
-        'currentWeek': currentWeek,
-        'weekTitle': weekTitle,
-        'gridWeek': gridWeek,
+        'weekTitles': weekTitles,
         'gridRows': gridRows,
-        'gridDayStartsMs': gridDayStartsMs,
+        'fallbackWeekMs': fallbackWeekMs,
       };
 }
 
@@ -300,13 +343,9 @@ class WidgetSnapshot {
   const WidgetSnapshot({
     required this.version,
     required this.generatedAtMs,
-    required this.todayYear,
-    required this.todayMonth,
-    required this.todayDay,
-    required this.todayTitle,
-    required this.tomorrowTitle,
     required this.dayStartsMs,
-    required this.todayWeekday,
+    required this.dayLabels,
+    required this.tzOffsetMinutes,
     required this.theme,
     required this.layout,
     required this.sessions,
@@ -318,46 +357,40 @@ class WidgetSnapshot {
   final int version;
   final int generatedAtMs;
 
-  /// 生成这份快照时，「今天」是哪一天。
+  /// **窗口里每一天的本地零点**（epoch 毫秒），从本周一起，共
+  /// `kWidgetHorizonDays + 1` 个。最后一个不是一天，是**排他上界**。
   ///
-  /// 这是整个小组件**唯一一种「安静地错」**的防线：用户一周没开 App，快照会
-  /// 照样说「今天是周三」，然后自信地画出**上周三**的课 —— 看起来完全正常。
-  /// 所以原生侧渲染前必须拿本机的年月日和这三个数比一次，对不上就画一句
-  /// 「打开 ClassCal 更新」，而不是把上周的课当成今天的。
+  /// 原生侧要回答「今天是第几天」只做一次区间比较：从后往前找第一个
+  /// `<= now` 的下标。**这就是「过零点自己翻页」的全部机制** —— 它不需要知道
+  /// 今天是几月几号，只需要知道 `now` 落在这条轴的第几格。
   ///
-  /// 发三个整数而不是「epoch 天数」：后者要 Dart 和 Kotlin **各写一份一样的
-  /// 天数换算算法**，而 `minSdk = 24` 又用不了 `java.time`（没开 core library
-  /// desugaring），只能手搓 `Calendar`。三个整数一个算法都不需要。
-  final int todayYear;
-  final int todayMonth;
-  final int todayDay;
-
-  /// `今天 · 周三` / `明天 · 周四`。列表两组的标题。
+  /// 曾经这里是**三个**零点（今天/明天/后天），另配 `todayYear/Month/Day`
+  /// 三个整数供原生比对 —— 那一版过了零点就判定整份快照过期，桌面上那张卡片
+  /// 于是**每天都要靠打开一次 App 才活**。长度从 3 变成 36 不是「多备几天」，
+  /// 是换了一种表达方式。
   ///
-  /// 留在顶层而不是搬进块里：**「今天是几号」和哪个日程无关**，每个块抄一份
-  /// 只是把同一个事实存 N 遍。
-  final String todayTitle;
-  final String tomorrowTitle;
-
-  /// **今天 / 明天 / 后天** 三天的本地零点（epoch 毫秒），正好 3 个。
-  ///
-  /// 「这两节课分别是哪天的」在原生侧是纯粹的大小比较：落在
-  /// `[dayStartsMs[0], dayStartsMs[1])` 里就是今天的。不让原生自己去算本地零点，
-  /// 是「不做日历运算」这条原则最直接的体现 —— 那要用到时区数据库，
-  /// 而在两个语言里各算一遍就是两处会走偏的地方。
-  ///
-  /// **它和块上的 [WidgetSetBlock.gridDayStartsMs] 是两个东西**，名字不同就是
-  /// 为了不让人看混：这里是「今天起连续三天的零点」（列表布局用它分今天/明天），
-  /// 那里是「某一块画的那一周的七个零点」（周网格用它筛事件、算列号）。
+  /// 不让原生自己去算本地零点，是「不做日历运算」这条原则最直接的体现：
+  /// 那要用到时区数据库，而 `minSdk = 24` 又用不了 `java.time`。
   final List<int> dayStartsMs;
 
-  /// 今天星期几（1=周一 … 7=周日）。
+  /// 每一天的 `周三`，和 [dayStartsMs] 的**前 `kWidgetHorizonDays` 项**
+  /// 一一对应（长度 `kWidgetHorizonDays`，比 [dayStartsMs] 少那个排他上界）。
   ///
-  /// 周网格要把它那一列标出来。原生当然也能从 `Calendar` 读到 —— 但那又是一次
-  /// 「读时钟」，而读时钟和「算日历」之间只差一点点，边界一旦模糊，下一个人
-  /// 就会顺手在那里做一次日期减法。这边已经有了这个值（`todayTitle` 就是用它
-  /// 拼的），顺手发过去更省事。
-  final int todayWeekday;
+  /// 是**绝对的**星期标签，不是「今天/明天」那种相对措辞 —— 后者一过零点
+  /// 就是错的，而那正是这一版要修的毛病。「今天 · 」/「明天 · 」那两个前缀
+  /// 由原生侧在下标 0 / 1 上现拼，因为它是唯一知道「哪个下标是今天」的一侧。
+  final List<String> dayLabels;
+
+  /// 生成这份快照时，本机的 UTC 偏移（分钟）。
+  ///
+  /// **一道跨时区的保险。** 老版本比的是本机年月日，所以飞一趟时区之后第二天
+  /// 必定过期、强制重开，顺手就把偏移纠正了。换成 35 天的窗口之后这个纠正要
+  /// 等到窗口用尽才发生，而那期间「哪节课算今天」会偏几小时 —— 一班早八可能
+  /// 整个上午都标错。
+  ///
+  /// 对不上就当过期。两边都只是**读一次当前偏移**，不是日期运算：偏移是个
+  /// 整数，比它和比两个整数没有区别。
+  final int tzOffsetMinutes;
 
   final WidgetTheme theme;
   final WidgetLayout layout;
@@ -399,11 +432,9 @@ class WidgetSnapshot {
   Map<String, Object?> toJson() => {
         'version': version,
         'generatedAtMs': generatedAtMs,
-        'today': {'y': todayYear, 'm': todayMonth, 'd': todayDay},
-        'todayTitle': todayTitle,
-        'tomorrowTitle': tomorrowTitle,
         'dayStartsMs': dayStartsMs,
-        'todayWeekday': todayWeekday,
+        'dayLabels': dayLabels,
+        'tzOffsetMinutes': tzOffsetMinutes,
         'theme': theme.toJson(),
         'layout': layout.toJson(),
         'sessions': [for (final s in sessions) s.toJson()],
@@ -435,7 +466,7 @@ class WidgetSetInfo {
 /// 把解析后的上课时刻折成一份小组件快照。
 ///
 /// [now] 由调用方传入 —— 时间是这里唯一的隐含输入，显式化才能在测试里把
-/// 「刚过零点」「正好第 9 天」这些边界钉死。
+/// 「刚过零点」「刚好压在窗口最后一格」「掉到窗口外一天」这些边界钉死。
 ///
 /// [sets] 是全部日程（顺序即数据库顺序）；[activeSetId] 指明 App 当前停在哪一套，
 /// 总览块借用的就是它的坐标系。两者都为空时照样有一块总览块，
@@ -506,17 +537,19 @@ WidgetSnapshot buildWidgetSnapshot({
   return WidgetSnapshot(
     version: kWidgetSnapshotVersion,
     generatedAtMs: now.millisecondsSinceEpoch,
-    todayYear: today.year,
-    todayMonth: today.month,
-    todayDay: today.day,
-    todayTitle: '今天 · ${_weekdayCn(today.weekday)}',
-    tomorrowTitle:
-        '明天 · ${_weekdayCn(today.add(const Duration(days: 1)).weekday)}',
+    // `<= horizonDays`：最后一格不是第 36 天，是**排他上界**。
+    // 少这一格的话，最后一天夜里到次日零点之间没人把卡片翻过去。
     dayStartsMs: [
-      for (var i = 0; i <= 2; i++)
-        today.add(Duration(days: i)).millisecondsSinceEpoch,
+      for (var i = 0; i <= horizonDays; i++)
+        windowStart.add(Duration(days: i)).millisecondsSinceEpoch,
     ],
-    todayWeekday: today.weekday,
+    dayLabels: [
+      for (var i = 0; i < horizonDays; i++)
+        _weekdayCn(windowStart.add(Duration(days: i)).weekday),
+    ],
+    // 从 `now` 而不是 `today` 取：`today` 已经被抹成当天零点，那时区偏移
+    // 在夏令时切换的那一天会差一小时。
+    tzOffsetMinutes: now.timeZoneOffset.inMinutes,
     theme: WidgetTheme(
       surface: _argb(theme.surface),
       onSurface: _argb(theme.onSurface),
@@ -532,52 +565,65 @@ WidgetSnapshot buildWidgetSnapshot({
       sets: sets,
       activeSetId: activeSetId,
       sessions: sessions,
-      today: today,
+      windowStart: windowStart,
+      horizonDays: horizonDays,
     ),
   );
 }
 
 /// 每个日程一块，末尾跟一个总览块。
 ///
-/// 用**输入那份** `ResolvedSession`（不是 [WidgetSession]）来找「这套课表第一节在
-/// 第几周」：它带着每节课在**自己那套编号体系**里的 `week`，而 `WidgetSession`
-/// 刻意不带（原生侧改按日期筛之后，那个字段没有任何读者了）。
+/// 用**输入那份** `ResolvedSession`（不是 [WidgetSession]）来找「这套课表第一节课
+/// 在哪一周」：`WidgetSession` 刻意不带 `week`（原生侧改按日期筛之后，那个字段
+/// 没有任何读者了），而「最早那一节课」是一个**日期**上的事，两者都可以；
+/// 这里用输入那份只是因为它还没有被窗口裁过。
 List<WidgetSetBlock> _blocks({
   required List<WidgetSetInfo> sets,
   required int activeSetId,
   required List<ResolvedSession> sessions,
-  required DateTime today,
+  required DateTime windowStart,
+  required int horizonDays,
 }) {
-  final firstWeek = _firstWeeksBySet(sessions);
-
-  /// 一块的网格坐标 = 锚点 + 画第几周。
+  /// 一块的标题表和兜底周。
   ///
-  /// [anchor] 是这块用来算「今天第几周」的锚点。今天不在学期内时（放假、或者
-  /// 锚点还没设）退到 [fallbackWeek]：一张空格子比「往前翻几周的真课」难看得多，
-  /// 而这正是 fallback 存在的意义。
+  /// [anchor] 只用来把**日期**翻译成这块自己的周号（`weekOf`）—— 两个日程的
+  /// `week1Monday` 不同时，同一个 `windowStart + 7k` 落在不同的周号上，而
+  /// **日期区间是同一个**。这正是「各算各的、但别搞错那个是编号不是日期」。
+  ///
+  /// [mine] 是这块自己的事件，只用来找兜底周（最早那节课在哪一周）。
   WidgetSetBlock block({
     required int id,
     required String name,
     required DateTime anchor,
-    required int? fallbackWeek,
+    required List<ResolvedSession> mine,
     required bool overview,
   }) {
-    final week = weekOf(week1Monday: anchor, date: today);
-    final gridWeek = week > 0 ? week : (fallbackWeek ?? 1);
     return WidgetSetBlock(
       id: id,
       name: name,
-      // 总览块**没有自己的周号**，所以这里是 0 而不是借来的那个数。
-      // 它借当前那一套的只是**日期区间**；把周号也一起带过来就变成「编一个」，
-      // 而桌面上没有任何东西能看出它是编的。
-      currentWeek: overview ? 0 : (week > 0 ? week : 0),
-      // 同理，总览的标题**只有日期区间、没有「第 N 周」**。
-      weekTitle:
-          overview ? _rangeTitle(anchor, gridWeek) : _weekTitle(anchor, week),
-      gridWeek: gridWeek,
+      weekTitles: [
+        for (var k = 0; k * 7 < horizonDays; k++)
+          if (overview)
+            // 总览**没有自己的周号**，所以这里只有日期区间。硬写一个
+            // 「第 N 周」就是编的，而桌面上没有任何东西能看出它是编的。
+            _rangeOf(windowStart.add(Duration(days: k * 7)))
+          else
+            _weekTitle(
+              anchor,
+              weekOf(
+                week1Monday: anchor,
+                date: windowStart.add(Duration(days: k * 7)),
+              ),
+            ),
+      ],
       gridRows: kPeriodRowCount,
-      gridDayStartsMs: _gridDayStarts(anchor, gridWeek),
+      fallbackWeekMs: _fallbackWeek(anchor, mine),
     );
+  }
+
+  final bySet = <int, List<ResolvedSession>>{};
+  for (final s in sessions) {
+    (bySet[s.setId] ??= <ResolvedSession>[]).add(s);
   }
 
   final out = <WidgetSetBlock>[
@@ -586,22 +632,22 @@ List<WidgetSetBlock> _blocks({
         id: s.id,
         name: s.name,
         anchor: s.week1Monday,
-        fallbackWeek: firstWeek[s.id],
+        mine: bySet[s.id] ?? const <ResolvedSession>[],
         overview: false,
       ),
   ];
 
-  // 总览借**当前这一套**的周次与日期。总览没有自己的周号，而把几个起点不同的
-  // 周次合起来本来就没有唯一正确答案 —— 按当前日程的日期对齐是唯一自洽的选择
-  // （和 App 里总览页同一条）。一个日程都没有时坐标系退到「今天所在的那一周」：
-  // 桌面上那张卡片该显示「今天没有课」，而不是「打开 ClassCal 更新」。
+  // 总览借**当前这一套**的锚点。它自己不构成一个学期，所以「今天不在学期里」
+  // 对它无从判断（它的 `weekTitles` 永远是日期区间，不会是空串），于是它的
+  // 兜底周只能按「全部日程里最早的那一节课」算。一个日程都没有时退到
+  // 本周 —— 桌面上那张卡片该显示「今天没有课」，而不是「打开 ClassCal 更新」。
   final focus = _focusSet(sets, activeSetId);
   out.add(
     block(
       id: kOverviewBlockId,
       name: _overviewName,
-      anchor: focus?.week1Monday ?? _mondayOf(today),
-      fallbackWeek: focus == null ? null : firstWeek[focus.id],
+      anchor: focus?.week1Monday ?? _mondayOf(windowStart),
+      mine: sessions,
       overview: true,
     ),
   );
@@ -611,20 +657,6 @@ List<WidgetSetBlock> _blocks({
 
 /// 总览块显示的名字 —— 也就是小组件上那条日程名信息条在总览下的文案。
 const String _overviewName = '总览';
-
-/// 每个日程「最早的那一周是第几周」。没有课的日程不在表里。
-///
-/// 取**最小**而不是「第一条」：输入顺序不保证（`buildWidgetSnapshot` 的两个
-/// 生产调用方各自排过序，但夹具不一定），而「最早的周」和顺序无关。
-Map<int, int> _firstWeeksBySet(List<ResolvedSession> sessions) {
-  final out = <int, int>{};
-  for (final s in sessions) {
-    if (s.cancelled) continue;
-    final cur = out[s.setId];
-    if (cur == null || s.week < cur) out[s.setId] = s.week;
-  }
-  return out;
-}
 
 /// 「跟随当前」和「认不出来的 key」都落到这里。
 ///
@@ -638,13 +670,30 @@ WidgetSetInfo? _focusSet(List<WidgetSetInfo> sets, int activeSetId) {
   return sets.first;
 }
 
-/// [week] 那一周的七个本地零点（周一 … 周日）。
-List<int> _gridDayStarts(DateTime week1Monday, int week) {
-  final w = week < 1 ? 1 : week;
+/// 「今天不在这个日程的学期里时画哪一周」的七个本地零点（周一 … 周日）。
+///
+/// 判据（在原生侧）是这一周的标题为空串，也就是今天早于第 1 周 —— 那时候按
+/// 窗口算出来的那一周是一张**空格子**，而往前翻到第一节课所在的那一周至少
+/// 画的是真课。**这是保留旧行为**，不是新加的。
+///
+/// 取**最早**而不是「第一条」：输入顺序不保证（`buildWidgetSnapshot` 的两个
+/// 生产调用方各自排过序，但夹具不一定），而「最早的日期」和顺序无关。
+///
+/// [mine] 一节课都没有时退到 [anchor] 的第 1 周 —— 那是这个日程该有的样子，
+/// 而不是「本周」（那会去画一张属于别的日程的网格）。
+List<int> _fallbackWeek(DateTime anchor, List<ResolvedSession> mine) {
+  DateTime? earliest;
+  for (final s in mine) {
+    if (s.cancelled) continue;
+    final d = dateOnly(s.date);
+    if (earliest == null || d.isBefore(earliest)) earliest = d;
+  }
+  final monday = earliest != null
+      ? _mondayOf(earliest)
+      : dateFor(week1Monday: anchor, week: 1, weekday: 1);
   return [
-    for (var d = 1; d <= 7; d++)
-      dateFor(week1Monday: week1Monday, week: w, weekday: d)
-          .millisecondsSinceEpoch,
+    for (var d = 0; d <= 6; d++)
+      monday.add(Duration(days: d)).millisecondsSinceEpoch,
   ];
 }
 
@@ -702,14 +751,18 @@ List<int> _boundaries(
   return set.toList()..sort();
 }
 
-/// `第 5 周 · 10/5–10/11`；[week] 不在学期内时返回空串。
+/// `第 5 周 · 10/5–10/11`；[week] 不在学期内时返回**空串**。
+///
+/// 那个空串是 [WidgetSetBlock.fallbackWeekMs] 的**唯一判据** —— 原生侧据此
+/// 决定「这一周该画窗口里那一周，还是画兜底那一周」。空串不是「没有标题」
+/// 那个意思，改这里的返回值就是在改渲染行为。
 String _weekTitle(DateTime week1Monday, int week) =>
-    week <= 0 ? '' : '第 $week 周 · ${_rangeTitle(week1Monday, week)}';
+    week <= 0 ? '' : '第 $week 周 · ${_rangeOf(
+          dateFor(week1Monday: week1Monday, week: week, weekday: 1),
+        )}';
 
-/// `10/5–10/11`。总览块的标题 —— 它没有自己的周号。
-String _rangeTitle(DateTime week1Monday, int week) {
-  final w = week < 1 ? 1 : week;
-  final monday = dateFor(week1Monday: week1Monday, week: w, weekday: 1);
+/// `10/5–10/11` —— 从 [monday] 起的那一周。总览块的标题用它：它没有自己的周号。
+String _rangeOf(DateTime monday) {
   final sunday = monday.add(const Duration(days: 6));
   return '${monday.month}/${monday.day}–${sunday.month}/${sunday.day}';
 }

@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.jingjunyu" "\0"
-            VALUE "FileDescription", "classcal" "\0"
+            VALUE "FileDescription", "ClassCal" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "classcal" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.jingjunyu. All rights reserved." "\0"
             VALUE "OriginalFilename", "classcal.exe" "\0"
-            VALUE "ProductName", "classcal" "\0"
+            VALUE "ProductName", "ClassCal" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

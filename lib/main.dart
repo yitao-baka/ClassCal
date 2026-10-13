@@ -6,8 +6,10 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app/localization.dart';
 import 'app/native_sync.dart';
+import 'app/providers.dart';
 import 'app/settings_providers.dart';
 import 'core/settings/app_settings.dart';
+import 'core/settings/schedule_ref.dart';
 import 'core/theme/app_theme.dart';
 import 'features/home_page.dart';
 import 'features/settings/widget_page.dart';
@@ -73,10 +75,12 @@ class _NativeSyncHostState extends ConsumerState<_NativeSyncHost> {
         // `onNewIntent` 存。所以「首帧」和「每次回到前台」都问一次，
         // 那两种路径就都覆盖到了（原生侧取一次就清，重复问是安全的）。
         _consumeLaunchTarget();
+        _consumeOpenTarget();
       },
     );
     // 首帧之后再问：`navigatorKey.currentState` 要等第一帧才非空。
     WidgetsBinding.instance.addPostFrameCallback((_) => _consumeLaunchTarget());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _consumeOpenTarget());
   }
 
   /// 「这次启动是为了配置某个小组件」的那一次。
@@ -90,6 +94,36 @@ class _NativeSyncHostState extends ConsumerState<_NativeSyncHost> {
     final navigator = navigatorKey.currentState;
     if (navigator == null) return;
     pushWidgetConfig(navigator, id);
+  }
+
+  /// 「这次启动是因为点了小组件卡片（不是齿轮）」的那一次。
+  ///
+  /// 落到**这个实例配的那个日程 + 今天那一周**。用户点桌面上的卡片，要的是
+  /// 「看这个日程的课」，而不是「看这个实例的配置」—— 后者是齿轮那条路。
+  ///
+  /// 三件事合起来就是目的地，用的全是**已经存在**的状态，没有新写一个：
+  /// 实例的 `setKey` 来自原生、`selectedTabProvider` 收的正是同一个词表、
+  /// `viewedWeekProvider` 回到 null 就等于「跟着当前周走」（见它的注释）。
+  Future<void> _consumeOpenTarget() async {
+    final id = await ref.read(homeWidgetBridgeProvider).consumeOpen();
+    if (!mounted || id == null) return;
+
+    final instances = await ref.read(homeWidgetBridgeProvider).instances();
+    if (!mounted) return;
+    for (final instance in instances) {
+      if (instance.id != id) continue;
+      // `follow` 不是标签页的 key（那会把「跟着当前」当作一个固定目标，
+      // 切到别处之后它就永远出不来），所以它和认不出的串一样**不选**，
+      // 只清周次 —— 那正好是「跟着当前走」。
+      if (ScheduleRef.isTabKey(instance.setKey)) {
+        ref.read(selectedTabProvider.notifier).select(instance.setKey);
+      }
+      break;
+    }
+    // 无论上面选没选成，都要回到今天那一周：用户手翻到第 3 周之后又在桌面上
+    // 点了一下卡片，期待的是「回到今天的课」。不重置的话打开的是第 3 周，
+    // 而卡片上明明白白写着今天。
+    ref.read(viewedWeekProvider.notifier).reset();
   }
 
   @override

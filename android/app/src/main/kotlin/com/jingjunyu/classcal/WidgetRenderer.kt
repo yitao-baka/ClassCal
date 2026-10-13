@@ -44,7 +44,25 @@ object WidgetRenderer {
 
     /** 点齿轮打到 `MainActivity` 上的那个 action。 */
     const val ACTION_CONFIGURE = "com.jingjunyu.classcal.WIDGET_CONFIGURE"
+
+    /** 点卡片**除齿轮之外**的区域打到 `MainActivity` 上的那个 action。 */
+    const val ACTION_OPEN = "com.jingjunyu.classcal.WIDGET_OPEN"
+
     const val EXTRA_WIDGET_ID = "app_widget_id"
+
+    /**
+     * 整卡点击那条 `PendingIntent` 的 request code 起点。
+     *
+     * 齿轮用的是 appWidgetId 本身，这一条用 `REQUEST_OPEN_BASE + id`。
+     * **严格说，撞在同一个 request code 上也不会出事** —— `PendingIntent` 的
+     * 相等性是把 action 一起算的（齿轮那句注释里写了这条），两个 action 不同。
+     * 分开是**为了别去依赖那条性质**：它埋在 `filterEquals` 的定义里，
+     * 而看代码的人只会看到两个 `getActivity` 用着同一个数字。撞上时的表现是
+     * 「点齿轮和点卡片主体进了同一个地方」，那不会报错，只会看起来像齿轮坏了。
+     *
+     * 取 100000 是因为 appWidgetId 由启动器分配、实践上到不了四位数。
+     */
+    private const val REQUEST_OPEN_BASE = 100_000
 
     /** 尺寸读不到时的兜底，和 `classcal_widget_info.xml` 的 minWidth/minHeight 一致。 */
     private const val FALLBACK_WIDTH_DP = 110
@@ -149,12 +167,30 @@ object WidgetRenderer {
     }
 
     /**
-     * 渲染成一份 `RemoteViews`。
+     * 渲染成一份 `RemoteViews`，**并把整卡点击挂上去**。
+     *
+     * 这一步刻意留在最外面、只有一处：四种布局（含两张提示卡）都从这里出去，
+     * 漏挂一种的表现是「某个尺寸点不动」—— 而那是四种里最难发现的一种漏。
+     * 挂在这里就不用去数底下有几个 `return`。
      *
      * [content] 是**配置里选的值**（可能是 [CONTENT_AUTO]），真正的档位由
      * [effectiveContent] 决定。[scope] 同理由 [blockFor] 决定落到哪一块。
      */
     fun remotes(
+        context: Context,
+        id: Int,
+        content: String,
+        scope: String,
+        showSetName: Boolean,
+        snapshot: WidgetSnapshot?,
+        nowMs: Long,
+        widthDp: Int,
+        heightDp: Int,
+    ): RemoteViews = build(
+        context, id, content, scope, showSetName, snapshot, nowMs, widthDp, heightDp,
+    ).also { attachOpen(context, it, id) }
+
+    private fun build(
         context: Context,
         id: Int,
         content: String,
@@ -179,15 +215,19 @@ object WidgetRenderer {
         val layout = snapshot.layout
         return when (effectiveContent(content, widthDp, heightDp, layout)) {
             CONTENT_NEXT -> nextView(context, snapshot, block, nowMs)
-            CONTENT_WEEK ->
-                weekView(context, snapshot, block, id, showSetName, widthDp, heightDp)
+
+            CONTENT_WEEK -> weekView(
+                context, snapshot, block, id, showSetName, widthDp, heightDp, nowMs,
+            )
 
             CONTENT_TODAY -> listView(
-                context, snapshot, block, id, layout, showSetName, heightDp, tomorrow = false,
+                context, snapshot, block, id, layout, showSetName, heightDp, nowMs,
+                tomorrow = false,
             )
 
             else -> listView(
-                context, snapshot, block, id, layout, showSetName, heightDp, tomorrow = true,
+                context, snapshot, block, id, layout, showSetName, heightDp, nowMs,
+                tomorrow = true,
             )
         }
     }
@@ -300,30 +340,54 @@ object WidgetRenderer {
         rv.setTextColor(R.id.next_title, theme.onSurface)
         rv.setTextColor(R.id.next_location, theme.secondary)
 
-        val session = snapshot.currentOrNext(block, nowMs) ?: return rv.apply {
+        // 「今天是窗口里的第几天」。**这个下标是「这节是不是今天的」的唯一来源** ——
+        // 拿它和这一节的 `dayIndexOf` 比。不问这一句的话，恒真的「今天是不是第 0 天」
+        // 会让下面那一支永远命中、后面全是死代码，而表现是周六上午的卡片上写着
+        // 「第一二节 · 08:00–09:40」，指着一节**周一**的课，读起来就是
+        // 「我今天一二节有课」。这是整个小组件里最容易信的假话。
+        //
+        // `isStale` 已经把「今天不在窗口里」挡在门外了，所以这里 `t` 一定在
+        // 0..horizonDays-1 里；真出了窗口也只是退化成「接下来没有课了」。
+        val t = snapshot.dayIndexOf(nowMs)
+
+        // **搜索范围夹到一周之内。** 窗口从 9 天变成 35 天之后，`currentOrNext`
+        // 会在放假（或者课表后几周是空的）时一路找到三周后的那节课，然后这张
+        // 2×1 的卡片写着「周三 08:00–09:40」—— 读起来就是「周三有课」，而它其实
+        // 是三周后的周三。一周是能自圆其说的范围：更远的话，与其报一个用户无从
+        // 定位是哪个「周三」的日子，不如说「接下来没有课了」。
+        val weekEnd = snapshot.dayStartsMs.getOrNull(t + 7) ?: Long.MAX_VALUE
+
+        val session = snapshot.currentOrNext(block, nowMs, untilMs = weekEnd) ?: return rv.apply {
             setTextViewText(R.id.next_title, "接下来没有课了")
             setTextViewText(R.id.next_location, "")
         }
 
         rv.setInt(R.id.next_bar, "setBackgroundColor", session.color)
 
+        val dayIndex = snapshot.dayIndexOf(session.startAtMs)
+
         // 「上课中」是唯一一种不需要倒计时的进行态：它只依赖 `nowMs` 落在
         // [startAtMs, endAtMs) 里，而那一刻本来就会有一个边界闹钟把我们叫醒。
         // 真正的倒计时（「还有 23 分钟」）需要每分钟一跳的闹钟，这里没有那种东西。
         val eyebrow = when {
             session.isCurrent(nowMs) -> "上课中 · ${session.endLabel} 下课"
-            // **问的是这一节课在哪一天，不是「今天是不是第 0 天」。**
-            // 后者恒真（`now` 一定落在今天那个区间里），于是这一支永远命中、
-            // 下面那一支是死代码 —— 表现是周六上午的卡片上写着
-            // 「第一二节 · 08:00–09:40」，指着一节**周一**的课，
-            // 读起来就是「我今天一二节有课」。这是整个小组件里最容易信的假话。
-            snapshot.dayIndexOf(session.startAtMs) == 0 ->
-                listOfNotNull(
-                    session.periodLabel.ifEmpty { null },
-                    "${session.startLabel}–${session.endLabel}",
-                ).joinToString(" · ")
 
-            else -> "${session.dayLabel} ${session.startLabel}–${session.endLabel}"
+            dayIndex == t -> listOfNotNull(
+                session.periodLabel.ifEmpty { null },
+                "${session.startLabel}–${session.endLabel}",
+            ).joinToString(" · ")
+
+            dayIndex == t + 1 -> "${session.dayLabel} ${session.startLabel}–${session.endLabel}"
+
+            // 一周之内、但不是今明两天：**必须带上日期**。窗口有 5 周，
+            // 光写「周三」会是一个无从判断是哪个周三的日期 —— 而这里说的恰恰是
+            // 一节几天之后的课。`dateLabel` 每条事件都带着（`10/15` 这种），
+            // 空串时退化成只有星期，仍旧比一个光秃秃的「周三 08:00」强。
+            else -> listOfNotNull(
+                session.dateLabel.ifEmpty { null },
+                session.dayLabel.ifEmpty { null },
+                "${session.startLabel}–${session.endLabel}",
+            ).joinToString(" ")
         }
         rv.setTextViewText(R.id.next_eyebrow, eyebrow)
         rv.setTextViewText(R.id.next_title, session.title)
@@ -346,6 +410,7 @@ object WidgetRenderer {
         layout: WidgetLayout,
         showSetName: Boolean,
         heightDp: Int,
+        nowMs: Long,
         tomorrow: Boolean,
     ): RemoteViews {
         val rv = RemoteViews(context.packageName, R.layout.widget_list)
@@ -356,26 +421,30 @@ object WidgetRenderer {
         attachGear(context, rv, id, theme)
         attachSetLabel(rv, block, theme, showSetName)
 
+        // **今天不再是一个常量 0，而是一个下标。** 「今天 / 明天」这两组以前是
+        // 现成的字段（`sessionsOnDay(block, 0/1)`），现在得先问一句今天是窗口里的
+        // 第几天 —— 这一句问完，跨天就不再需要 App 跑一次了。
+        val t = snapshot.dayIndexOf(nowMs)
+        val weekIdx = snapshot.weekIndexOf(nowMs)
+
         // 「今天 + 明天」时主标题换成周次：两个分组各自带着「今天 · 周三」
         // 「明天 · 周四」，主标题再写一次「今天」就重复了。
         //
         // 周次取自**这一块**而不是快照顶层 —— 被钉在某个日程上的实例该显示
-        // 那个日程的「第 N 周」，而总览块的 `weekTitle` 只有日期区间（它没有
-        // 自己的周号），`ifEmpty` 正好兜住。
+        // 那个日程的「第 N 周」，而总览块的标题只有日期区间（它没有自己的周号），
+        // `ifEmpty` 正好兜住。
         rv.setTextViewText(
             R.id.list_header,
-            if (tomorrow) block.weekTitle.ifEmpty { snapshot.todayTitle }
-            else snapshot.todayTitle,
+            if (tomorrow) snapshot.weekTitleOf(block, weekIdx).ifEmpty { snapshot.labelFor(t, t) }
+            else snapshot.labelFor(t, t),
         )
 
-        val groups = if (tomorrow) {
-            listOf(
-                snapshot.todayTitle to snapshot.sessionsOnDay(block, 0),
-                snapshot.tomorrowTitle to snapshot.sessionsOnDay(block, 1),
-            )
-        } else {
-            listOf(snapshot.todayTitle to snapshot.sessionsOnDay(block, 0))
-        }
+        // **今天落在窗口最后一天时只画「今天」一组。** 那时候 `t + 1` 已经在窗口
+        // 外了，画一个必定空的「明天」等于说假话 —— 而它底下会跟着一句
+        // 「没有课」，读起来就是「明天没课」。窗口用尽之前 Dart 会推一份新快照，
+        // 所以这是最后一天的边界，不是常态。
+        val days = if (tomorrow && snapshot.dayRange(t + 1) != null) listOf(t, t + 1) else listOf(t)
+        val groups = days.map { snapshot.labelFor(it, t) to snapshot.sessionsOnDay(block, it) }
         val total = groups.sumOf { it.second.size }
 
         rv.removeAllViews(R.id.rows)
@@ -391,7 +460,7 @@ object WidgetRenderer {
         // 两个分组标题**一律预留**，不再按「哪一组非空」数：空的那一组现在会出
         // 一行「没有课」（见下），它的标题也要占地方。预留得比实际画出来的多
         // 只会让我们提前一行折成「还有 N 节」，而少留一行的后果是最后一行露半个。
-        val visibleGroups = if (tomorrow) groups.size else 0
+        val visibleGroups = if (days.size > 1) groups.size else 0
         fun rowsThatFit(reserveFooter: Boolean): Int {
             val chrome = (if (showSetName) LABEL_DP else 0) + HEADER_DP +
                 GROUP_DP * visibleGroups + if (reserveFooter) FOOTER_DP else 0
@@ -449,7 +518,7 @@ object WidgetRenderer {
             // 分组标题在这一组**真要有东西画**时才出现：一个底下什么都没有的
             // 「明天 · 周四」比不写更让人困惑。
             if (shown.isEmpty() && !noteShown[i]) continue
-            if (tomorrow) rv.addView(R.id.rows, groupView(context, title, theme))
+            if (days.size > 1) rv.addView(R.id.rows, groupView(context, title, theme))
             if (shown.isEmpty()) {
                 rv.addView(R.id.rows, noteView(context, "没有课", theme))
             } else {
@@ -462,9 +531,11 @@ object WidgetRenderer {
         when {
             total == 0 -> {
                 rv.setViewVisibility(R.id.footer, View.VISIBLE)
+                // 措辞按**真画了几组**来，不是按用户配了什么：窗口最后一天上
+                // 只画了今天那一组，那时候写「这两天都没有课」里的「两天」是假的。
                 rv.setTextViewText(
                     R.id.footer,
-                    if (tomorrow) "这两天都没有课" else "今天没有课",
+                    if (groups.size > 1) "这两天都没有课" else "今天没有课",
                 )
             }
 
@@ -526,13 +597,22 @@ object WidgetRenderer {
         showSetName: Boolean,
         widthDp: Int,
         heightDp: Int,
+        nowMs: Long,
     ): RemoteViews {
         val rv = RemoteViews(context.packageName, R.layout.widget_week)
         val theme = snapshot.theme
         rv.setInt(R.id.widget_root, "setBackgroundColor", theme.surface)
         rv.setTextColor(R.id.week_header, theme.secondary)
         // 同上：周次取自这一块；总览块没有周号，退回一句「本周课表」。
-        rv.setTextViewText(R.id.week_header, block.weekTitle.ifEmpty { "本周课表" })
+        //
+        // 空串还有第二种含义：**今天不在这个日程的学期里**。那时候画的是兜底周
+        // （`gridFor` 决定的），标题退回「本周课表」正好对 —— 兜底周本来就不是
+        // 「本周」，而是「有课的那一周」。
+        val weekIdx = snapshot.weekIndexOf(nowMs)
+        rv.setTextViewText(
+            R.id.week_header,
+            snapshot.weekTitleOf(block, weekIdx).ifEmpty { "本周课表" },
+        )
         attachGear(context, rv, id, theme)
         attachSetLabel(rv, block, theme, showSetName)
 
@@ -551,7 +631,14 @@ object WidgetRenderer {
             .toInt().coerceAtLeast(5)
         rv.setImageViewBitmap(
             R.id.grid,
-            WidgetPainter.weekGrid(snapshot, block, gridW, gridH),
+            WidgetPainter.weekGrid(
+                snapshot = snapshot,
+                block = block,
+                grid = snapshot.gridFor(block, weekIdx),
+                nowMs = nowMs,
+                widthPx = gridW,
+                heightPx = gridH,
+            ),
         )
         return rv
     }
@@ -589,6 +676,40 @@ object WidgetRenderer {
         // 齿轮是灰色的矢量图，深色主题下会几乎看不见 —— 而「齿轮看不见」
         // 等于用户找不到配置入口。按主题染一次色。
         rv.setInt(R.id.gear, "setColorFilter", theme.secondary)
+    }
+
+    // -------------------------------------------------------------------------
+    // 整卡点击
+    // -------------------------------------------------------------------------
+
+    /**
+     * 卡片上**除齿轮之外**的任何地方：点一下打开 App，落到这个实例配的日程 + 今天那一周。
+     *
+     * 挂的是每个布局的根（`R.id.widget_root`，四种布局都有）。
+     * 「除齿轮之外」是**自动成立**的，不用在这里做减法：齿轮是根的子视图，自己带着
+     * 一个 `PendingIntent`，触摸被它吃掉，不会冒泡到根。
+     *
+     * [id] 传 0 或负数时什么都不挂 —— 那是配置页里那条 `preview` 路径
+     * （`id = -1`），它渲出来是一个 PNG，没有人能点它，挂上去只是白造一个
+     * `PendingIntent`。
+     */
+    private fun attachOpen(context: Context, rv: RemoteViews, id: Int) {
+        if (id <= 0) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            action = ACTION_OPEN
+            putExtra(EXTRA_WIDGET_ID, id)
+            // 和齿轮那一条完全一样，理由也一样：`NEW_TASK` 是必须的（从启动器进程
+            // 拉起 Activity），`SINGLE_TOP` 让已经在跑的 App 走 `onNewIntent`
+            // 而不是再 `onCreate` 一次 —— 后者会重建整个 Flutter engine。
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pi = PendingIntent.getActivity(
+            context,
+            REQUEST_OPEN_BASE + id,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        rv.setOnClickPendingIntent(R.id.widget_root, pi)
     }
 
     // -------------------------------------------------------------------------

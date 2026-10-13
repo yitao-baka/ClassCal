@@ -26,6 +26,8 @@
 **桌面小组件**
 
 - 一个可自由缩放的实例（2×1 到 280×460dp），内容按尺寸自适应
+- **过了零点自己翻页**，不用进 App；点卡片（齿轮除外）打开 App，落到那个实例
+  配的日程 + 今天那一周
 - 显示什么由**每个实例单独选**：下一节 / 今日 / 今日+明日 / 本周缩略网格
 - 每个实例可选「跟随当前日程」或固定某一个日程，可显示或隐藏日程名
 - 网格里画**缩写**（预置一套 + 可逐门自定义）—— 一列只有屏宽的七分之一，
@@ -55,7 +57,7 @@ lib/
   features/      界面（首页周网格、设置各页、小组件配置）
 android/app/src/main/kotlin/…
                 闹钟、通知、定位、小组件渲染与存储
-test/            346 条
+test/            345 条
 tool/            开发期核对脚本
 ```
 
@@ -65,12 +67,28 @@ tool/            开发期核对脚本
 
 ```bash
 flutter pub get
-flutter build apk --release
+flutter build apk --release --target-platform android-arm64
 ```
+
+**要带 `--target-platform android-arm64`。** 不带的话打出来是一个通用包，
+里面同时装着三种 CPU 架构的原生库：实测 64,815,693 字节，其中 64,101,604
+（98.9%）是三份 `.so`，而一台手机**只需要其中一份**。只出 arm64 之后实测
+22,524,634 字节（21.5 MB）—— 省掉 65%，那 40 多 MB 是纯粹白带的。
+
+（新包里仍残留两个几十 KB 的 `libdartjni.so`（armeabi-v7a / x86_64），
+是 `dartjni` 这个包给每种架构都塞了一份小桩，合计约 190 KB、不到 1%。
+为它去配 `packagingOptions` 排除，收益比坑小，不做。）
+
+如果要用 x86_64 模拟器调试，就**别加这个参数**（或者用 `flutter run`，
+它自己按目标架构构建），否则装不上、报错还看不懂。
 
 release 包目前**用的是 debug 签名**（`android/app/build.gradle.kts` 里那行
 `signingConfig = signingConfigs.getByName("debug")`），profile 同理 ——
 所以三种包能互相覆盖安装而不丢数据。真要发布请换掉这个签名配置。
+
+一个可以再省几个百分点、但**故意没做**的选项是 `--obfuscate`：它会让
+`libapp.so` 小一点，代价是崩溃栈变成一串不可读的符号。为 1 MB 换掉排查能力
+不划算。
 
 ## 测试
 
