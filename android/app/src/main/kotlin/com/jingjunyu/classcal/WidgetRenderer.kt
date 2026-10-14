@@ -457,51 +457,79 @@ object WidgetRenderer {
         // 和那句「还有 N 节」一起顶出去 —— 而「还有 N 节」正是为了不让用户
         // 以为课就这几节才写的。
         //
-        // 两个分组标题**一律预留**，不再按「哪一组非空」数：空的那一组现在会出
-        // 一行「没有课」（见下），它的标题也要占地方。预留得比实际画出来的多
-        // 只会让我们提前一行折成「还有 N 节」，而少留一行的后果是最后一行露半个。
-        val visibleGroups = if (days.size > 1) groups.size else 0
-        fun rowsThatFit(reserveFooter: Boolean): Int {
+        // 分组标题吃的高度按**真会画出来的个数**算（见下 `showTitle`）：只画今天
+        // 时一个分组标题都不画（顶部那条 header 已经写着「今天 · 周二」），
+        // 「今天 + 明天」时最少画今天那一个。
+        val twoDays = days.size > 1
+        fun capacity(groupTitles: Int, reserveFooter: Boolean): Int {
             val chrome = (if (showSetName) LABEL_DP else 0) + HEADER_DP +
-                GROUP_DP * visibleGroups + if (reserveFooter) FOOTER_DP else 0
+                GROUP_DP * groupTitles + if (reserveFooter) FOOTER_DP else 0
             return ((heightDp - chrome) / ROW_DP).coerceIn(1, layout.maxListRows)
+        }
+
+        // **今天的课先排满，剩下的行才轮到明天。**
+        //
+        // 以前是「先给后面的组留一行，再按顺序填」。分组标题和数据行吃的是同一份
+        // 高度，所以「给明天留一行」实际是拿今天的一节课去换明天的一节课 ——
+        // 今天 4 节、只排得下 3 行时，画出来是「今天 2 节 + 明天 1 节」，
+        // 读起来就是「我今天少了一节课」，而缺的那节明明还在下面排着队。
+        //
+        // 明天出场的条件是**今天一节不落地排完、且还剩至少一整行**。行数是整数，
+        // 「还剩 1」就是「够一整行」，所以不存在只排半行的情况。
+        //
+        // 判据用的是**两个分组标题**那份容量，也就是保守的那一份。明天不出场时
+        // 它那个标题省下来了（`GROUP_DP = 26 < ROW_DP = 34`，所以这笔高度还给
+        // 今天），但**不拿这份多出来的空间回头再问一遍明天能不能出场** —— 那会
+        // 让两个决定互相喂食：不出场 → 空间变大 → 能出场 → 空间变小 → 不出场。
+        // 宁可少排明天一行，也不能把行数算多一行、末行被裁掉半个。
+        //
+        // 返回值：[今天几行, 明天几行, 还能拿出几行放「没有课」那句]。
+        // 明天「出场」和「排了几行」是两件事：明天一节课都没有时它照样出场，
+        // 只是排 0 行、由那句「没有课」占位。
+        fun plan(groupTitles: Int, reserveFooter: Boolean): IntArray {
+            val wide = capacity(groupTitles, reserveFooter)
+            val todayRows = minOf(groups[0].second.size, wide)
+            val rest = wide - todayRows
+            if (twoDays && rest >= 1) {
+                val tomorrowRows = minOf(rest, groups[1].second.size)
+                return intArrayOf(todayRows, tomorrowRows, rest - tomorrowRows)
+            }
+            val narrow = capacity(if (twoDays) 1 else 0, reserveFooter)
+            return intArrayOf(minOf(groups[0].second.size, narrow), 0, 0)
         }
 
         // 先按「不需要页脚」算一次：装得下就一行都不用省，页脚也不用出。
         // 装不下才把页脚那块高度让出来重算一次。
-        val roomy = rowsThatFit(reserveFooter = false)
-        val start = if (total <= roomy) roomy else rowsThatFit(reserveFooter = true)
-
-        // 预算先分给每一组，而不是让第一组吃光：一组一行都拿不到时连它的
-        // 分组标题都不会出现（见下面那条「空分组不画标题」），于是选了
-        // 「今天 + 明天」的人只看到今天，只会觉得这个选项坏了。
-        // 先给后面的组留一行，剩下的按顺序填。
-        val allowance = IntArray(groups.size)
-        var left = start
-        val lastWithRows = groups.indexOfLast { it.second.isNotEmpty() }
-        if (lastWithRows > 0 && left >= 2) {
-            allowance[lastWithRows] = 1
-            left--
-        }
-        for (i in groups.indices) {
-            if (left <= 0) break
-            val give = minOf(left, groups[i].second.size - allowance[i])
-            if (give > 0) {
-                allowance[i] += give
-                left -= give
-            }
+        val wideTitles = if (twoDays) 2 else 0
+        val roomy = plan(wideTitles, reserveFooter = false)
+        val fitted = if (total - roomy[0] - roomy[1] > 0) {
+            plan(wideTitles, reserveFooter = true)
+        } else {
+            roomy
         }
 
-        // 「没有课」那一句**只吃剩下的预算**。
+        val allowance = IntArray(groups.size) { fitted[it] }
+        // 明天出场 ⇔ 上面那条分支命中过 ⇔ 今天的课排完之后还剩下了行。
+        val tomorrowInPlay = twoDays && fitted[1] + fitted[2] > 0
+
+        // 分组标题画几个。明天不出场时它那个标题跟着省掉：一个底下什么都没有的
+        // 「明天 · 周三」比不写更让人困惑，而且省下的高度已经还给今天了。
+        val showTitle = BooleanArray(groups.size) { i -> twoDays && (i == 0 || tomorrowInPlay) }
+
+        // 「没有课」那一句**只吃剩下的预算**（`plan` 还回来的第三个数）。
         //
         // 今天已经有三节课把行占满时它会被挤掉，这是有意的：有内容的信息优先，
         // 而「今天有课、明天没有」这件事，明天那一组的分组标题本身就在说了。
         // 反过来把这句话排到课程行前面，就会出现「显示着『明天没有课』、
         // 今天的课却被折成『还有 2 节』」—— 拿有内容的换没内容的。
         //
+        // 明天不出场时这个预算是 0，所以这里不会冒出一句「明天没有课」去说明
+        // 一件用户根本没在问的事（他看不到明天那一组）。
+        //
         // `total > 0` 那一层守卫：今天明天都没课时这里一句话都不给，
         // 让页脚那句「今天和明天都没有课」独自收尾。两句都画会打架。
         val noteShown = BooleanArray(groups.size)
+        var left = fitted[2]
         if (total > 0) {
             for (i in groups.indices) {
                 if (left <= 0) break
@@ -518,7 +546,7 @@ object WidgetRenderer {
             // 分组标题在这一组**真要有东西画**时才出现：一个底下什么都没有的
             // 「明天 · 周四」比不写更让人困惑。
             if (shown.isEmpty() && !noteShown[i]) continue
-            if (days.size > 1) rv.addView(R.id.rows, groupView(context, title, theme))
+            if (showTitle[i]) rv.addView(R.id.rows, groupView(context, title, theme))
             if (shown.isEmpty()) {
                 rv.addView(R.id.rows, noteView(context, "没有课", theme))
             } else {
@@ -526,8 +554,12 @@ object WidgetRenderer {
             }
         }
 
-        val shownTotal = allowance.sum()
-        val hidden = total - shownTotal
+        // 页脚只数**真画出来的那一组（那两组）**里藏了多少节。明天不出场时它
+        // 的课不算在这个数里 —— 屏幕上只有今天的课，而页脚写「还有 6 节」会让人
+        // 以为是今天还有 6 节，那比不写更糟。（这是本轮新出现的组合：以前明天
+        // 总会分到一行，所以「今天被截断」和「明天不出场」不会同时成立。）
+        val shownGroups = if (tomorrowInPlay) groups.size else 1
+        val hidden = (0 until shownGroups).sumOf { groups[it].second.size - allowance[it] }
         when {
             total == 0 -> {
                 rv.setViewVisibility(R.id.footer, View.VISIBLE)
@@ -535,7 +567,7 @@ object WidgetRenderer {
                 // 只画了今天那一组，那时候写「这两天都没有课」里的「两天」是假的。
                 rv.setTextViewText(
                     R.id.footer,
-                    if (groups.size > 1) "这两天都没有课" else "今天没有课",
+                    if (tomorrowInPlay) "这两天都没有课" else "今天没有课",
                 )
             }
 

@@ -537,18 +537,30 @@ void main() {
           reason: '按宽度判「小」的那个写法回来了 —— 它在 4 列网格上永不命中');
     });
 
-    test('列表行数按高度算，不是一个固定的行数', () {
+    test('列表行数按高度算，而且今天的课先排满', () {
       // 写死行数的后果是「今天 + 明天」多出一个分组标题就把最后一行连同
       // 「还有 N 节」一起顶出卡片 —— 而那句话正是为了不让用户以为课就
       // 这几节才写的。填不满的后果是多出来的行露一半，看起来像渲染坏了。
       final renderer = _read(_kotlinRenderer);
-      expect(renderer, contains('rowsThatFit'),
-          reason: '列表不再按高度算行数了');
+      expect(renderer, contains('capacity('), reason: '列表不再按高度算行数了');
       expect(RegExp(r'heightDp - chrome').hasMatch(renderer), isTrue,
           reason: '算行数时没有把卡片高度减掉标题占的那块');
-      // 每一组都要分到行，否则「今天 + 明天」里第二组连标题都不出现。
-      expect(renderer, contains('allowance'),
-          reason: '预算又变成第一组吃光了');
+
+      // **这一条的方向在 2026-10-14 反过来了，不是「过时了」。**
+      //
+      // 它原来要求「每一组都要分到行」，理由是「否则第二组连标题都不出现」。
+      // 那条规矩现在恰恰是要避免的：分组标题和数据行吃的是同一份高度，所以
+      // 「给明天留一行」实际是拿今天的一节课去换明天的一节课 —— 用户报的就是
+      // 「今天的课还差一节没显示全，却显示了第二天的」。
+      // 现在明天只有在**今天一节不落地排完、还剩至少一整行**时才出场。
+      expect(RegExp(r'rest >= 1').hasMatch(renderer), isTrue,
+          reason: '明天不再受「还剩至少一整行」这道闸门管着了');
+      expect(renderer, contains('minOf(groups[0].second.size'),
+          reason: '今天不再是第一个吃预算的那一组了');
+      expect(renderer, contains('tomorrowInPlay'),
+          reason: '「明天到底出不出场」没有变成一个显式的概念 —— '
+              '它现在同时决定分组标题画不画、页脚怎么措辞、'
+              '以及「没有课」那句用不用得上预算');
     });
 
     test('布局里只许用 RemoteViews 放行的控件', () {
